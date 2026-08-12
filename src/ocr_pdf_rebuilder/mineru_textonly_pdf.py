@@ -51,7 +51,7 @@ GREEK_ITALIC_FONT = RUNTIME_ROOT / "fonts/DejaVuSerif-Italic.ttf"
 MONO_FONT = RUNTIME_ROOT / "fonts/NotoSansMono-Regular.ttf"
 
 DPI = 200
-OUTPUT_VERSION = "mineru-reportlab-cell-aware-render-v51-dual-text-image-outputs"
+OUTPUT_VERSION = "mineru-reportlab-cell-aware-render-v52-forward-page-leak-repair"
 
 # MinerU execution. Leave values as None to keep MinerU's own defaults.
 MINERU_API_URL = None
@@ -86,6 +86,23 @@ UNFITTING_LAYOUT_IMAGE_FALLBACK_REASON = "OCR layout block could not fit inside 
 TABLE_TEXT_RETRY_REASON = "table block could not fit bbox; retried page with MinerU table recognition disabled"
 MISSING_OCR_IMAGE_FALLBACK_REASON = "nonblank source page has no MinerU page result; image variant required"
 UNUSABLE_OCR_IMAGE_FALLBACK_REASON = "OCR remained unusable after retry (handwriting or low-quality scan); image variant required"
+FORWARD_PAGE_LEAK_RETRY_REASON = "forward page content leak detected; isolated MinerU retry needed"
+FORWARD_PAGE_LEAK_SOURCE_TEXT_FALLBACK_REASON = (
+    "isolated MinerU retry did not pass page-local validation; used source PDF page text"
+)
+FORWARD_PAGE_LEAK_IMAGE_FALLBACK_REASON = (
+    "isolated MinerU retry did not pass page-local validation and source page had no usable text; "
+    "image variant required"
+)
+FORWARD_PAGE_LEAK_LOOKAHEAD = 5
+FORWARD_PAGE_LEAK_NGRAM_SIZE = 16
+FORWARD_PAGE_LEAK_MIN_SOURCE_CHARS = 120
+FORWARD_PAGE_LEAK_MIN_NEIGHBOR_CHARS = 500
+FORWARD_PAGE_LEAK_MIN_OUTPUT_SOURCE_RATIO = 1.25
+FORWARD_PAGE_LEAK_MIN_NEIGHBOR_COVERAGE = 0.60
+FORWARD_PAGE_LEAK_MIN_RETRY_OWN_COVERAGE = 0.50
+FORWARD_PAGE_LEAK_MAX_RETRY_SOURCE_RATIO = 1.35
+FORWARD_PAGE_LEAK_RETRY_BATCH_SIZE = 24
 PSEUDOTEXT_MIN_RAW_CHARS = 160
 PSEUDOTEXT_MAX_COMPRESSION_RATIO = 0.58
 PSEUDOTEXT_MIN_COORD_TOKENS = 6
@@ -1194,12 +1211,45 @@ def write_pdf_selected_pages(pdf_path, output_path, page_indices):
         out.close()
 
 
+def write_pdf_isolated_selected_pages(pdf_path, output_path, page_indices):
+    """Write selected pages with one blank separator after every source page.
+
+    MinerU occasionally assigns several following source pages to the current
+    page.  A blank page on both sides of every candidate (apart from the file
+    boundaries) prevents one candidate page from being adjacent to another
+    during the repair pass.  Candidate results therefore occupy local page
+    indexes 0, 2, 4, ... in the generated PDF.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with fitz.open(pdf_path) as src:
+        out = fitz.open()
+        for page_index in page_indices:
+            if page_index < 0 or page_index >= src.page_count:
+                raise IndexError(f"Selected page index {page_index} is outside {pdf_path}")
+            page = src[page_index]
+            out.insert_pdf(src, from_page=page_index, to_page=page_index)
+            out.new_page(width=float(page.rect.width), height=float(page.rect.height))
+        out.save(output_path, garbage=4, deflate=True)
+        out.close()
+
+
 def selected_pages_checkpoint_identity(pdf_path, page_indices, table_enabled=None):
     return {
         "schema": MINERU_CHECKPOINT_SCHEMA,
         "source": source_file_signature(pdf_path),
         "selected_pages": [int(page_index) for page_index in page_indices],
         "parser_config_hash": mineru_parser_config_hash(table_enabled=table_enabled),
+        "runtime_identity_hash": mineru_runtime_identity_hash(),
+    }
+
+
+def isolated_pages_checkpoint_identity(pdf_path, page_indices):
+    return {
+        "schema": MINERU_CHECKPOINT_SCHEMA,
+        "source": source_file_signature(pdf_path),
+        "selected_pages": [int(page_index) for page_index in page_indices],
+        "isolation": "blank-page-after-each-selected-page-v1",
+        "parser_config_hash": mineru_parser_config_hash(),
         "runtime_identity_hash": mineru_runtime_identity_hash(),
     }
 
@@ -1258,6 +1308,56 @@ def run_or_reuse_mineru_selected_pages(
         },
     )
     return collect_page_results(selected_pdf, output_root)
+
+
+def run_or_reuse_mineru_isolated_pages(
+    pdf_path,
+    page_indices,
+    isolated_pdf,
+    output_root,
+    log_path,
+    checkpoint_path,
+):
+    page_indices = [int(page_index) for page_index in page_indices]
+    identity = isolated_pages_checkpoint_identity(pdf_path, page_indices)
+    checkpoint = read_checkpoint(checkpoint_path)
+    if checkpoint_matches(checkpoint, identity, status="complete"):
+        if not isolated_pdf.exists():
+            write_pdf_isolated_selected_pages(pdf_path, isolated_pdf, page_indices)
+        if mineru_result_manifest_matches(checkpoint, isolated_pdf, output_root):
+            log(
+                "    Resume: reusing one integrity-verified isolated MinerU repair batch "
+                f"containing {len(page_indices)} source page(s)"
+            )
+            return collect_page_results(isolated_pdf, output_root)
+
+    if isolated_pdf.exists():
+        isolated_pdf.unlink()
+    write_pdf_isolated_selected_pages(pdf_path, isolated_pdf, page_indices)
+    if output_root.exists():
+        shutil.rmtree(output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    log(
+        "    Running isolated MinerU repair batch for original pages: "
+        + ", ".join(str(page_index + 1) for page_index in page_indices)
+    )
+    result_manifest = run_mineru_parser_with_retries(
+        isolated_pdf,
+        output_root,
+        log_path,
+    )
+    write_checkpoint(
+        checkpoint_path,
+        {
+            **identity,
+            "status": "complete",
+            "updated_at": time.time(),
+            "output_dir": str(output_root),
+            "result_manifest": result_manifest,
+        },
+    )
+    return collect_page_results(isolated_pdf, output_root)
 
 
 def build_mineru_parser_runs(pdf_path, page_count, work_dir, mineru_dir, log_path):
@@ -4151,6 +4251,328 @@ def accept_repaired_retry_result(result):
     append_retry_reason(result, "accepted MinerU batched quality retry")
 
 
+def normalize_page_overlap_text(text):
+    text = unicodedata.normalize("NFKC", str(text or "")).casefold()
+    return "".join(character for character in text if character.isalnum())
+
+
+def text_ngram_hashes(text, size=FORWARD_PAGE_LEAK_NGRAM_SIZE):
+    if len(text) < size:
+        return set()
+    return {hash(text[index : index + size]) for index in range(len(text) - size + 1)}
+
+
+def page_result_primary_text(result):
+    """Return one authoritative text representation without JSON/Markdown duplication."""
+    cell_texts = [
+        normalize_text(source_text_from_cell(cell))
+        for cell in (result.get("cells") or [])
+        if normalize_text(source_text_from_cell(cell))
+    ]
+    if cell_texts:
+        return "\n".join(cell_texts)
+    fallback_text = normalize_text(result.get("fallback_text", ""))
+    if fallback_text:
+        return fallback_text
+    return normalize_text(result.get("md_nohf_text", ""))
+
+
+def source_page_overlap_texts(pdf_path):
+    with fitz.open(pdf_path) as doc:
+        return [normalize_page_overlap_text(page.get_text("text")) for page in doc]
+
+
+def forward_page_leak_matches(output_text, page_index, source_texts):
+    if page_index < 0 or page_index >= len(source_texts):
+        return []
+    current_source = source_texts[page_index]
+    if len(current_source) < FORWARD_PAGE_LEAK_MIN_SOURCE_CHARS:
+        return []
+
+    normalized_output = normalize_page_overlap_text(output_text)
+    output_source_ratio = len(normalized_output) / max(1, len(current_source))
+    if output_source_ratio <= FORWARD_PAGE_LEAK_MIN_OUTPUT_SOURCE_RATIO:
+        return []
+    output_ngrams = text_ngram_hashes(normalized_output)
+    if not output_ngrams:
+        return []
+
+    matches = []
+    stop = min(len(source_texts), page_index + FORWARD_PAGE_LEAK_LOOKAHEAD + 1)
+    for target_index in range(page_index + 1, stop):
+        target_source = source_texts[target_index]
+        if len(target_source) < FORWARD_PAGE_LEAK_MIN_NEIGHBOR_CHARS:
+            continue
+        target_ngrams = text_ngram_hashes(target_source)
+        if not target_ngrams:
+            continue
+        coverage = len(target_ngrams & output_ngrams) / len(target_ngrams)
+        if coverage < FORWARD_PAGE_LEAK_MIN_NEIGHBOR_COVERAGE:
+            continue
+        matches.append(
+            {
+                "target_page": target_index + 1,
+                "target_coverage": round(coverage, 6),
+                "output_source_length_ratio": round(output_source_ratio, 6),
+                "output_chars": len(normalized_output),
+                "source_chars": len(current_source),
+                "target_source_chars": len(target_source),
+            }
+        )
+    return matches
+
+
+def detect_forward_page_content_leaks(pdf_path, page_results, source_texts=None, mark=True):
+    source_texts = source_texts or source_page_overlap_texts(pdf_path)
+    detected = {}
+    for page_index, result in sorted(page_results.items()):
+        matches = forward_page_leak_matches(
+            page_result_primary_text(result),
+            page_index,
+            source_texts,
+        )
+        if not matches:
+            continue
+        detected[page_index] = matches
+        if mark:
+            result["forward_page_content_leak_detected"] = True
+            result["forward_page_content_leak_targets"] = [
+                item["target_page"] for item in matches
+            ]
+            result["forward_page_content_leak_metrics"] = matches
+            result["needs_retry"] = True
+            append_retry_reason(result, FORWARD_PAGE_LEAK_RETRY_REASON)
+    return detected
+
+
+def retry_result_is_page_local(result, page_index, source_texts):
+    if not retry_result_has_usable_cells(result):
+        return False, {"reason": "no usable isolated MinerU cells"}
+
+    retry_text = normalize_page_overlap_text(page_result_primary_text(result))
+    source_text = source_texts[page_index]
+    source_ngrams = text_ngram_hashes(source_text)
+    retry_ngrams = text_ngram_hashes(retry_text)
+    own_coverage = (
+        len(source_ngrams & retry_ngrams) / len(source_ngrams)
+        if source_ngrams
+        else 0.0
+    )
+    length_ratio = len(retry_text) / max(1, len(source_text))
+    forward_matches = forward_page_leak_matches(retry_text, page_index, source_texts)
+    metrics = {
+        "own_source_coverage": round(own_coverage, 6),
+        "retry_source_length_ratio": round(length_ratio, 6),
+        "forward_matches": forward_matches,
+    }
+    valid = (
+        own_coverage >= FORWARD_PAGE_LEAK_MIN_RETRY_OWN_COVERAGE
+        and length_ratio <= FORWARD_PAGE_LEAK_MAX_RETRY_SOURCE_RATIO
+        and not forward_matches
+    )
+    if not valid:
+        metrics["reason"] = "isolated MinerU result failed page-local text validation"
+    return valid, metrics
+
+
+def source_pdf_text_page_result(source, page_index):
+    page = source[page_index]
+    page_size = [float(page.rect.width), float(page.rect.height)]
+    cells = []
+    for block in page.get_text("blocks", sort=True):
+        if len(block) < 7 or int(block[6]) != 0:
+            continue
+        text = normalize_text(block[4])
+        if not text:
+            continue
+        x0, y0, x1, y1 = [float(value) for value in block[:4]]
+        x0 = max(0.0, min(x0, page_size[0]))
+        y0 = max(0.0, min(y0, page_size[1]))
+        x1 = max(x0 + 1.0, min(x1, page_size[0]))
+        y1 = max(y0 + 1.0, min(y1, page_size[1]))
+        cells.append(
+            {
+                "bbox": [x0, y0, x1, y1],
+                "category": "Text",
+                "text": text,
+                "source": "source-pdf-text-fallback",
+                "__bbox_units": "pdf",
+                "__page_size": page_size,
+            }
+        )
+
+    joined = "\n\n".join(source_text_from_cell(cell) for cell in cells)
+    if len(normalize_page_overlap_text(joined)) < FORWARD_PAGE_LEAK_MIN_SOURCE_CHARS:
+        return None
+    return {
+        "cells": cells,
+        "fallback_text": "",
+        "filtered": False,
+        "needs_retry": False,
+        "retry_reason": "",
+        "image_size": None,
+        "json_path": None,
+        "image_path": None,
+        "md_nohf_text": joined,
+        "md_nohf_path": None,
+        "source_pdf_text_fallback": True,
+    }
+
+
+def apply_forward_page_leak_metadata(result, original, validation=None):
+    result["forward_page_content_leak_detected"] = True
+    result["forward_page_content_leak_targets"] = list(
+        original.get("forward_page_content_leak_targets") or []
+    )
+    result["forward_page_content_leak_metrics"] = list(
+        original.get("forward_page_content_leak_metrics") or []
+    )
+    if validation is not None:
+        result["forward_page_content_leak_retry_validation"] = validation
+    append_retry_reason(result, FORWARD_PAGE_LEAK_RETRY_REASON)
+
+
+def repair_forward_page_content_leaks(pdf_path, page_results, work_dir, log_path):
+    source_texts = source_page_overlap_texts(pdf_path)
+    detected = detect_forward_page_content_leaks(
+        pdf_path,
+        page_results,
+        source_texts=source_texts,
+        mark=True,
+    )
+    candidates = sorted(detected)
+    if not candidates:
+        return page_results
+
+    log(
+        f"    Forward page-content leak detected on {len(candidates)} page(s): "
+        + ", ".join(str(page_index + 1) for page_index in candidates)
+    )
+    retry_results = {}
+    retry_errors = {}
+    retry_root = work_dir / "forward_page_leak_isolated_retry"
+    for batch_number, start in enumerate(
+        range(0, len(candidates), FORWARD_PAGE_LEAK_RETRY_BATCH_SIZE),
+        1,
+    ):
+        batch = candidates[start : start + FORWARD_PAGE_LEAK_RETRY_BATCH_SIZE]
+        batch_root = retry_root / f"batch_{batch_number:04d}"
+        isolated_pdf = batch_root / f"{pdf_path.stem}_isolated_pages.pdf"
+        retry_output_dir = batch_root / "output"
+        retry_log = log_path.with_name(
+            f"{log_path.stem}_forward_page_leak_batch_{batch_number:04d}{log_path.suffix}"
+        )
+        retry_checkpoint = batch_root / "isolated_batch_complete.json"
+        try:
+            isolated_pages = run_or_reuse_mineru_isolated_pages(
+                pdf_path,
+                batch,
+                isolated_pdf,
+                retry_output_dir,
+                retry_log,
+                retry_checkpoint,
+            )
+        except Exception as exc:
+            log(f"    Isolated MinerU repair batch {batch_number} failed: {exc}")
+            for page_index in batch:
+                retry_errors[page_index] = str(exc)
+            continue
+        for local_candidate_index, page_index in enumerate(batch):
+            retry_results[page_index] = isolated_pages.get(local_candidate_index * 2)
+
+    repaired = []
+    source_fallback = []
+    image_fallback = []
+    image_dir = work_dir / "forward_page_leak_image_fallback_pages"
+    with fitz.open(pdf_path) as source:
+        for page_index in candidates:
+            original = page_results[page_index]
+            retry_result = retry_results.get(page_index)
+            if retry_result is not None:
+                valid, validation = retry_result_is_page_local(
+                    retry_result,
+                    page_index,
+                    source_texts,
+                )
+            else:
+                validation = {
+                    "reason": retry_errors.get(
+                        page_index,
+                        "isolated MinerU repair returned no candidate page result",
+                    )
+                }
+                valid = False
+
+            if valid:
+                accept_repaired_retry_result(retry_result)
+                apply_forward_page_leak_metadata(retry_result, original, validation)
+                retry_result["source_page_retry"] = True
+                retry_result["retry_page"] = page_index + 1
+                retry_result["forward_page_content_leak_repaired"] = True
+                retry_result["forward_page_content_leak_repair_mode"] = "isolated_mineru"
+                page_results[page_index] = retry_result
+                repaired.append(page_index + 1)
+                continue
+
+            fallback_result = source_pdf_text_page_result(source, page_index)
+            if fallback_result is not None:
+                apply_forward_page_leak_metadata(fallback_result, original, validation)
+                fallback_result["forward_page_content_leak_repaired"] = True
+                fallback_result["forward_page_content_leak_source_text_fallback"] = True
+                fallback_result["forward_page_content_leak_repair_mode"] = "source_pdf_page_text"
+                append_retry_reason(
+                    fallback_result,
+                    FORWARD_PAGE_LEAK_SOURCE_TEXT_FALLBACK_REASON,
+                )
+                page_results[page_index] = fallback_result
+                source_fallback.append(page_index + 1)
+                continue
+
+            image_path = image_dir / f"page_{page_index + 1:04d}.png"
+            render_pdf_page_to_png(pdf_path, page_index, image_path)
+            fallback_result = {
+                "cells": [],
+                "fallback_text": "",
+                "filtered": False,
+                "needs_retry": False,
+                "retry_reason": "",
+                "image_size": None,
+                "json_path": None,
+                "image_path": None,
+                "md_nohf_text": "",
+                "md_nohf_path": None,
+                "image_fallback_path": str(image_path),
+                "image_fallback_page": True,
+                "image_fallback_kind": "forward_page_content_leak",
+                "forward_page_content_leak_image_fallback": True,
+                "forward_page_content_leak_repair_mode": "source_page_image",
+            }
+            apply_forward_page_leak_metadata(fallback_result, original, validation)
+            append_retry_reason(
+                fallback_result,
+                FORWARD_PAGE_LEAK_IMAGE_FALLBACK_REASON,
+            )
+            page_results[page_index] = fallback_result
+            image_fallback.append(page_index + 1)
+
+    if repaired:
+        log(
+            "    Forward page-content leak repaired by isolated MinerU: "
+            + ", ".join(str(page_no) for page_no in repaired)
+        )
+    if source_fallback:
+        log(
+            "    Forward page-content leak repaired with page-local source PDF text: "
+            + ", ".join(str(page_no) for page_no in source_fallback)
+        )
+    if image_fallback:
+        log(
+            "    Forward page-content leak pages moved to the image variant: "
+            + ", ".join(str(page_no) for page_no in image_fallback)
+        )
+    return page_results
+
+
 def collapse_repeated_text_in_split_band_result(result):
     if not result:
         return result
@@ -6968,6 +7390,14 @@ def collect_qc_suspect_pages(pdf_path, page_results, page_specs, page_count):
             text = page_result_text(result)
             if result.get("source_page_retry"):
                 issues.append("page_range_retry")
+            if result.get("forward_page_content_leak_detected"):
+                issues.append("forward_page_content_leak_detected")
+            if result.get("forward_page_content_leak_repaired"):
+                issues.append("forward_page_content_leak_repaired")
+            if result.get("forward_page_content_leak_source_text_fallback"):
+                issues.append("forward_page_content_leak_source_text_fallback")
+            if result.get("forward_page_content_leak_image_fallback"):
+                issues.append("forward_page_content_leak_image_fallback")
             if result.get("pseudotext_detected") or page_result_has_high_repeated_pseudotext(result):
                 issues.append("high_repeated_pseudotext")
             if result.get("image_fallback_page") or result.get("image_fallback_path"):
@@ -7324,6 +7754,12 @@ def process_pdf(pdf_path, index, total):
     page_results = collect_parser_run_results(pdf_path, parser_runs)
     page_results = retry_bad_pages(pdf_path, page_results, work_dir, log_path)
     page_results = retry_unfitting_table_pages_as_text_batch(
+        pdf_path,
+        page_results,
+        work_dir,
+        log_path,
+    )
+    page_results = repair_forward_page_content_leaks(
         pdf_path,
         page_results,
         work_dir,

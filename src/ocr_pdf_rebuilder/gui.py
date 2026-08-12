@@ -10,6 +10,7 @@ import json
 import mimetypes
 import os
 from pathlib import Path
+import re
 import secrets
 import signal
 import subprocess
@@ -28,6 +29,7 @@ DEFAULT_INPUT_DIR = DEFAULT_RUNTIME_ROOT / "input"
 DEFAULT_OUTPUT_DIR = DEFAULT_RUNTIME_ROOT / "pdf_mineru"
 DEFAULT_SUMMARY_PATH = DEFAULT_RUNTIME_ROOT / "logs_mineru/batch_summary.json"
 MAX_LOG_CHARS = 400_000
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 class GuiHttpServer(ThreadingHTTPServer):
@@ -65,6 +67,10 @@ class GuiController:
         self._log_chunks: deque[str] = deque()
         self._log_chars = 0
         self._log_start = 0
+        self._progress_line_buffer = ""
+        self._file_progress: list[dict[str, object]] = []
+        self._active_file_index: int | None = None
+        self._active_parser_page_start = 1
 
     @staticmethod
     def _default_command() -> list[str]:
@@ -91,6 +97,7 @@ class GuiController:
         if not text:
             return
         with self._lock:
+            self._consume_progress_text(text)
             self._log_chunks.append(text)
             self._log_chars += len(text)
             while self._log_chars > MAX_LOG_CHARS and self._log_chunks:
@@ -102,6 +109,189 @@ class GuiController:
         self._log_chunks.clear()
         self._log_chars = 0
         self._log_start = 0
+        self._progress_line_buffer = ""
+
+    def _reset_file_progress(self, inputs: list[dict[str, object]]) -> None:
+        self._file_progress = [
+            {
+                "name": str(record["name"]),
+                "status": "pending",
+                "stage": "等待处理",
+                "percent": 0.0,
+                "page_current": 0,
+                "page_total": None,
+            }
+            for record in inputs
+        ]
+        self._active_file_index = None
+        self._active_parser_page_start = 1
+
+    def _progress_record(self, one_based_index: int | None = None) -> dict[str, object] | None:
+        index = self._active_file_index if one_based_index is None else one_based_index - 1
+        if index is None or index < 0 or index >= len(self._file_progress):
+            return None
+        return self._file_progress[index]
+
+    @staticmethod
+    def _set_progress(
+        record: dict[str, object],
+        *,
+        status: str | None = None,
+        stage: str | None = None,
+        percent: float | None = None,
+        page_current: int | None = None,
+        page_total: int | None = None,
+    ) -> None:
+        if status is not None:
+            record["status"] = status
+        if stage is not None:
+            record["stage"] = stage
+        if percent is not None:
+            previous = float(record.get("percent") or 0.0)
+            record["percent"] = round(max(previous, min(100.0, percent)), 1)
+        if page_total is not None and page_total > 0:
+            record["page_total"] = int(page_total)
+        if page_current is not None:
+            total = record.get("page_total")
+            current = max(0, int(page_current))
+            if isinstance(total, int):
+                current = min(current, total)
+            record["page_current"] = current
+
+    def _consume_progress_text(self, text: str) -> None:
+        normalized = (self._progress_line_buffer + text).replace("\r", "\n")
+        lines = normalized.split("\n")
+        self._progress_line_buffer = lines.pop()
+        for raw_line in lines:
+            line = ANSI_ESCAPE_RE.sub("", raw_line).strip()
+            if line:
+                self._consume_progress_line(line)
+
+    def _flush_progress_text(self) -> None:
+        line = ANSI_ESCAPE_RE.sub("", self._progress_line_buffer).strip()
+        self._progress_line_buffer = ""
+        if line:
+            self._consume_progress_line(line)
+
+    def _consume_progress_line(self, line: str) -> None:
+        match = re.search(r"^\[(\d+)/(\d+)\]\s+Start:\s+(.+\.pdf)\s*$", line)
+        if match:
+            index = int(match.group(1))
+            previous = self._progress_record()
+            if previous and previous.get("status") == "running":
+                self._set_progress(previous, status="completed", stage="已完成", percent=100.0)
+            self._active_file_index = index - 1
+            self._active_parser_page_start = 1
+            record = self._progress_record(index)
+            if record is not None:
+                record["name"] = Path(match.group(3)).name
+                self._set_progress(
+                    record,
+                    status="running",
+                    stage="准备文件",
+                    percent=0.0,
+                    page_current=0,
+                )
+            return
+
+        match = re.search(r"^\[(\d+)/(\d+)\]\s+Skip existing", line)
+        if match:
+            record = self._progress_record(int(match.group(1)))
+            if record is not None:
+                self._set_progress(record, status="skipped", stage="已复用现有成品", percent=100.0)
+            return
+
+        match = re.search(r"^\[(\d+)/(\d+)\]\s+FAILED:\s+(.+?\.pdf):", line)
+        if match:
+            record = self._progress_record(int(match.group(1)))
+            if record is not None:
+                self._set_progress(record, status="failed", stage="处理失败")
+            return
+
+        record = self._progress_record()
+        if record is None:
+            return
+
+        match = re.search(r"Pages:\s+(\d+)", line)
+        if match:
+            self._set_progress(record, page_total=int(match.group(1)))
+            return
+
+        if "[1/5] Running MinerU parser" in line:
+            self._set_progress(record, stage="MinerU 解析", percent=0.1)
+            return
+
+        match = re.search(r"MinerU task .*original pages (\d+)-(\d+)", line)
+        if match:
+            self._active_parser_page_start = int(match.group(1))
+            total = record.get("page_total")
+            current = self._active_parser_page_start - 1
+            percent = 65.0 * current / total if isinstance(total, int) and total else None
+            self._set_progress(
+                record,
+                stage=f"MinerU 解析第 {match.group(1)}–{match.group(2)} 页",
+                percent=percent,
+                page_current=current,
+            )
+            return
+
+        match = re.search(r"Processing pages:.*?(\d+)/(\d+)", line)
+        if match and str(record.get("stage", "")).startswith("MinerU 解析"):
+            current = self._active_parser_page_start - 1 + int(match.group(1))
+            total = record.get("page_total")
+            percent = 65.0 * current / total if isinstance(total, int) and total else None
+            self._set_progress(record, percent=percent, page_current=current)
+            return
+
+        if "[2/5] Loading MinerU JSON" in line:
+            total = record.get("page_total")
+            self._set_progress(
+                record,
+                stage="加载与修复识别结果",
+                percent=65.0,
+                page_current=total if isinstance(total, int) else None,
+            )
+            return
+
+        if "Running isolated MinerU repair batch" in line:
+            self._set_progress(record, stage="隔离重跑疑似跨页页面", percent=70.0)
+            return
+
+        if "[3/5] Building layout pages" in line:
+            self._set_progress(record, stage="构建页面布局", percent=75.0, page_current=0)
+            return
+
+        match = re.search(r"Layout page (\d+)/(\d+)", line)
+        if match:
+            current = int(match.group(1))
+            total = int(match.group(2))
+            self._set_progress(
+                record,
+                stage="构建页面布局",
+                percent=75.0 + 10.0 * current / total,
+                page_current=current,
+                page_total=total,
+            )
+            return
+
+        if "[4/5] Rendering text-only PDF" in line:
+            self._set_progress(record, stage="渲染纯文字 PDF", percent=85.0)
+            return
+        if "Rendering image-variant PDF" in line:
+            self._set_progress(record, stage="渲染带图片 PDF", percent=92.0)
+            return
+        if line.startswith("QC report:"):
+            self._set_progress(record, stage="生成并验证 QC", percent=98.0)
+            return
+        if "[5/5] Done" in line:
+            total = record.get("page_total")
+            self._set_progress(
+                record,
+                status="completed",
+                stage="已完成",
+                percent=100.0,
+                page_current=total if isinstance(total, int) else None,
+            )
 
     def list_inputs(self) -> list[dict[str, object]]:
         if not self.input_dir.exists():
@@ -140,6 +330,7 @@ class GuiController:
             self.input_dir.mkdir(parents=True, exist_ok=True)
             self.output_dir.mkdir(parents=True, exist_ok=True)
             self._clear_log()
+            self._reset_file_progress(inputs)
             self._run_id += 1
             self._status = "starting"
             self._returncode = None
@@ -176,6 +367,8 @@ class GuiController:
                     break
                 self._append_log(decoder.decode(chunk))
             self._append_log(decoder.decode(b"", final=True))
+            with self._lock:
+                self._flush_progress_text()
             returncode = process.wait()
         except Exception as exc:
             self._append_log(f"\n[GUI] 读取任务输出失败：{type(exc).__name__}: {exc}\n")
@@ -191,6 +384,19 @@ class GuiController:
                 self._finished_at = time.time()
                 self._status = "completed" if returncode == 0 else "failed"
                 self._process = None
+                record = self._progress_record()
+                if record is not None and record.get("status") == "running":
+                    if returncode == 0:
+                        total = record.get("page_total")
+                        self._set_progress(
+                            record,
+                            status="completed",
+                            stage="已完成",
+                            percent=100.0,
+                            page_current=total if isinstance(total, int) else None,
+                        )
+                    else:
+                        self._set_progress(record, status="failed", stage="任务异常结束")
         label = "正常完成" if returncode == 0 else f"结束，退出码={returncode}"
         self._append_log(f"\n[GUI] 任务{label}\n")
 
@@ -227,6 +433,7 @@ class GuiController:
                 "output_dir": str(self.output_dir),
                 "inputs": self.list_inputs(),
                 "outputs": self.list_outputs(),
+                "file_progress": [dict(record) for record in self._file_progress],
                 "summary": self.read_summary(),
             }
 
@@ -293,6 +500,16 @@ HTML_PAGE = r"""<!doctype html>
     .summary { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
     .metric { background:#f5f8f7; padding:10px; border-radius:8px; }
     .metric b { display:block; font-size:20px; margin-top:2px; }
+    .progress-list { display:grid; gap:12px; }
+    .progress-item { padding:12px; border:1px solid #e5eae9; border-radius:9px; background:#fbfcfc; }
+    .progress-head,.progress-detail { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .progress-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; font-weight:650; }
+    .progress-percent { color:var(--brand); font-size:13px; font-weight:720; white-space:nowrap; }
+    .progress-track { height:9px; margin:9px 0 7px; overflow:hidden; border-radius:999px; background:#e4ebe9; }
+    .progress-fill { height:100%; width:0; border-radius:inherit; background:linear-gradient(90deg,#278776,var(--brand)); transition:width .3s ease; }
+    .progress-item.failed .progress-fill { background:var(--danger); }
+    .progress-item.skipped .progress-fill { background:#7b8b91; }
+    .progress-detail { color:var(--muted); font-size:12px; }
     pre { min-height:260px; max-height:460px; overflow:auto; margin:0; padding:14px; border-radius:9px; background:#101817; color:#dcebe7; font:12px/1.55 Consolas,monospace; white-space:pre-wrap; word-break:break-word; }
     .message { min-height:20px; margin-top:8px; color:var(--danger); font-size:13px; }
     @media (max-width:760px) { .grid { grid-template-columns:1fr; } .wide { grid-column:auto; } header { align-items:flex-start; flex-direction:column; } .summary { grid-template-columns:1fr 1fr; } }
@@ -312,6 +529,10 @@ HTML_PAGE = r"""<!doctype html>
     <div class="card">
       <h2>批次摘要</h2>
       <div id="summary" class="summary"></div>
+    </div>
+    <div class="card wide">
+      <h2>文件总进度</h2>
+      <div id="fileProgress" class="progress-list"><div class="empty">任务尚未启动</div></div>
     </div>
     <div class="card">
       <h2>输入文件</h2>
@@ -342,9 +563,27 @@ function renderSummary(summary) {
   const counts=(summary&&summary.counts)||{}; const values=[['状态',summary?summary.status:'暂无'],['已完成',counts.completed||0],['已跳过',counts.skipped||0],['失败',counts.failed||0]];
   $('summary').textContent=''; values.forEach(([k,v])=>{const d=document.createElement('div');d.className='metric';const s=document.createElement('span');s.className='path';s.textContent=k;const b=document.createElement('b');b.textContent=v;d.append(s,b);$('summary').append(d);});
 }
+function renderFileProgress(files) {
+  const target=$('fileProgress'); target.textContent='';
+  if (!files.length) { const d=document.createElement('div'); d.className='empty'; d.textContent='任务尚未启动'; target.append(d); return; }
+  const stateLabels={pending:'等待',running:'处理中',completed:'完成',skipped:'复用',failed:'失败'};
+  files.forEach(file=>{
+    const item=document.createElement('div'); item.className='progress-item '+file.status;
+    const head=document.createElement('div'); head.className='progress-head';
+    const name=document.createElement('div'); name.className='progress-name'; name.title=file.name; name.textContent=file.name;
+    const percent=document.createElement('div'); percent.className='progress-percent'; percent.textContent=`${Number(file.percent||0).toFixed(1)}%`;
+    head.append(name,percent);
+    const track=document.createElement('div'); track.className='progress-track'; track.setAttribute('role','progressbar'); track.setAttribute('aria-label',file.name); track.setAttribute('aria-valuemin','0'); track.setAttribute('aria-valuemax','100'); track.setAttribute('aria-valuenow',String(file.percent||0));
+    const fill=document.createElement('div'); fill.className='progress-fill'; fill.style.width=`${Math.max(0,Math.min(100,Number(file.percent||0)))}%`; track.append(fill);
+    const detail=document.createElement('div'); detail.className='progress-detail';
+    const stage=document.createElement('span'); stage.textContent=`${stateLabels[file.status]||file.status} · ${file.stage||''}`;
+    const pages=document.createElement('span'); pages.textContent=file.page_total?`${file.page_current||0}/${file.page_total} 页`:'';
+    detail.append(stage,pages); item.append(head,track,detail); target.append(item);
+  });
+}
 async function refresh() {
   try { const r=await fetch('/api/status',{cache:'no-store'}); const s=await r.json();
-    $('status').textContent=labels[s.status]||s.status; $('status').className='status '+s.status; $('start').disabled=s.running||!s.inputs.length; $('stop').disabled=!s.running||s.status==='stopping'; $('inputPath').textContent='输入：'+s.input_dir; renderFiles('inputs',s.inputs); renderFiles('outputs',s.outputs,true); renderSummary(s.summary);
+    $('status').textContent=labels[s.status]||s.status; $('status').className='status '+s.status; $('start').disabled=s.running||!s.inputs.length; $('stop').disabled=!s.running||s.status==='stopping'; $('inputPath').textContent='输入：'+s.input_dir; renderFiles('inputs',s.inputs); renderFiles('outputs',s.outputs,true); renderSummary(s.summary); renderFileProgress(s.file_progress||[]);
     if(runId!==s.run_id){runId=s.run_id;logOffset=0;$('log').textContent='';}
     const lr=await fetch('/api/log?offset='+logOffset,{cache:'no-store'}); const l=await lr.json(); if(l.reset)$('log').textContent=''; if(l.text){$('log').textContent+=l.text;$('log').scrollTop=$('log').scrollHeight;} logOffset=l.next_offset;
   } catch(e) { $('message').textContent='无法连接 GUI 服务：'+e; }

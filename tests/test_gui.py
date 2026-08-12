@@ -77,6 +77,65 @@ class GuiControllerTests(unittest.TestCase):
         self.assertIn("生成完成", log)
         self.assertIn("任务正常完成", log)
 
+    def test_tracks_total_progress_for_each_file_from_pipeline_log(self):
+        for name in ("first.pdf", "second.pdf"):
+            (self.input_dir / name).write_bytes(b"fixture")
+        script = (
+            "print('PDFs:   2');"
+            "print('[1/2] Start: first.pdf');"
+            "print('    Pages:  100');"
+            "print('    [1/5] Running MinerU parser');"
+            "print('    MinerU task chunk_0001_pages_0001_0060: original pages 1-60 (60 page(s))');"
+            "print('Processing pages: 100%|##########| 60/60');"
+            "print('    [2/5] Loading MinerU JSON');"
+            "print('    [3/5] Building layout pages: 0/100');"
+            "print('        Layout page 50/100: blocks=8');"
+            "print('        Layout page 100/100: blocks=7');"
+            "print('    [4/5] Rendering text-only PDF with ReportLab');"
+            "print('    [5/5] Done');"
+            "print('[2/2] Skip existing current-version text output: second.pdf')"
+        )
+        controller = self.controller([sys.executable, "-u", "-c", script])
+
+        controller.start()
+        self.wait_until_finished(controller)
+
+        progress = controller.status()["file_progress"]
+        self.assertEqual([item["name"] for item in progress], ["first.pdf", "second.pdf"])
+        self.assertEqual(progress[0]["status"], "completed")
+        self.assertEqual(progress[0]["percent"], 100.0)
+        self.assertEqual(progress[0]["page_current"], 100)
+        self.assertEqual(progress[0]["page_total"], 100)
+        self.assertEqual(progress[1]["status"], "skipped")
+        self.assertEqual(progress[1]["percent"], 100.0)
+
+    def test_running_progress_combines_parser_and_layout_page_counts(self):
+        (self.input_dir / "sample.pdf").write_bytes(b"fixture")
+        controller = self.controller([sys.executable, "-c", "pass"])
+        inputs = controller.list_inputs()
+        with controller._lock:
+            controller._reset_file_progress(inputs)
+            controller._consume_progress_text(
+                "[1/1] Start: sample.pdf\n"
+                "    Pages:  200\n"
+                "    [1/5] Running MinerU parser\n"
+                "    MinerU task chunk_0002_pages_0061_0120: original pages 61-120 (60 page(s))\n"
+                "Processing pages:  50%|#####| 30/60\n"
+            )
+        parser_progress = controller.status()["file_progress"][0]
+        self.assertEqual(parser_progress["page_current"], 90)
+        self.assertEqual(parser_progress["percent"], 29.2)
+
+        with controller._lock:
+            controller._consume_progress_text(
+                "    [3/5] Building layout pages: 0/200\n"
+                "        Layout page 100/200: blocks=12\n"
+            )
+        layout_progress = controller.status()["file_progress"][0]
+        self.assertEqual(layout_progress["stage"], "构建页面布局")
+        self.assertEqual(layout_progress["page_current"], 100)
+        self.assertEqual(layout_progress["percent"], 80.0)
+
     def test_lists_outputs_and_reads_summary(self):
         output = self.output_dir / "结果 文件.pdf"
         output.write_bytes(b"pdf")

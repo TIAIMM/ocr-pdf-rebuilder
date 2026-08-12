@@ -24,28 +24,31 @@ import fitz
 from PIL import Image
 
 
-INPUT_DIR = Path.home() / "ocr_jobs/input"
-OUTPUT_DIR = Path.home() / "ocr_jobs/pdf_mineru"
-MINERU_OUTPUT_DIR = Path.home() / "ocr_jobs/mineru_output"
-TMP_DIR = Path.home() / "ocr_jobs/tmp/mineru_textonly_pdf"
-LOG_DIR = Path.home() / "ocr_jobs/logs_mineru"
-QC_DIR = Path.home() / "ocr_jobs/qc_mineru"
+RUNTIME_ROOT = Path(
+    os.environ.get("OCR_RUNTIME_ROOT", Path(__file__).resolve().parents[2])
+).expanduser().resolve()
+INPUT_DIR = RUNTIME_ROOT / "input"
+OUTPUT_DIR = RUNTIME_ROOT / "pdf_mineru"
+MINERU_OUTPUT_DIR = RUNTIME_ROOT / "mineru_output"
+TMP_DIR = RUNTIME_ROOT / "tmp/mineru_textonly_pdf"
+LOG_DIR = RUNTIME_ROOT / "logs_mineru"
+QC_DIR = RUNTIME_ROOT / "qc_mineru"
 
 MINERU_COMMAND = "mineru"
 
-CJK_REGULAR_FONT = Path.home() / "ocr_jobs/fonts/SourceHanSerifCN-Regular.ttf"
-CJK_MEDIUM_FONT = Path.home() / "ocr_jobs/fonts/SourceHanSerifCN-Medium.ttf"
-CJK_BOLD_FONT = Path.home() / "ocr_jobs/fonts/SourceHanSerifCN-Bold.ttf"
+CJK_REGULAR_FONT = RUNTIME_ROOT / "fonts/SourceHanSerifCN-Regular.ttf"
+CJK_MEDIUM_FONT = RUNTIME_ROOT / "fonts/SourceHanSerifCN-Medium.ttf"
+CJK_BOLD_FONT = RUNTIME_ROOT / "fonts/SourceHanSerifCN-Bold.ttf"
 
-LATIN_REGULAR_FONT = Path.home() / "ocr_jobs/fonts/SourceSerif4-Regular.ttf"
-LATIN_BOLD_FONT = Path.home() / "ocr_jobs/fonts/SourceSerif4-Bold.ttf"
-LATIN_ITALIC_FONT = Path.home() / "ocr_jobs/fonts/SourceSerif4-It.ttf"
+LATIN_REGULAR_FONT = RUNTIME_ROOT / "fonts/SourceSerif4-Regular.ttf"
+LATIN_BOLD_FONT = RUNTIME_ROOT / "fonts/SourceSerif4-Bold.ttf"
+LATIN_ITALIC_FONT = RUNTIME_ROOT / "fonts/SourceSerif4-It.ttf"
 
-GREEK_REGULAR_FONT = Path("/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf")
-GREEK_BOLD_FONT = Path("/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf")
-GREEK_ITALIC_FONT = Path("/usr/share/fonts/truetype/dejavu/DejaVuSerif-Italic.ttf")
+GREEK_REGULAR_FONT = RUNTIME_ROOT / "fonts/DejaVuSerif.ttf"
+GREEK_BOLD_FONT = RUNTIME_ROOT / "fonts/DejaVuSerif-Bold.ttf"
+GREEK_ITALIC_FONT = RUNTIME_ROOT / "fonts/DejaVuSerif-Italic.ttf"
 
-MONO_FONT = Path("/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf")
+MONO_FONT = RUNTIME_ROOT / "fonts/NotoSansMono-Regular.ttf"
 
 DPI = 200
 OUTPUT_VERSION = "mineru-reportlab-cell-aware-render-v51-dual-text-image-outputs"
@@ -1082,7 +1085,7 @@ def run_mineru_parser(
     log("    MinerU live progress:")
 
     start = time.monotonic()
-    returncode = run_live_process(cmd, Path.home(), log_path, stream_to_console=True)
+    returncode = run_live_process(cmd, RUNTIME_ROOT, log_path, stream_to_console=True)
     with LOG_LOCK:
         sys.stdout.write("\n")
         sys.stdout.flush()

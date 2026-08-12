@@ -2,13 +2,13 @@
 # still owns these values; this file is the contract for a later config refactor.
 
 [paths]
-input = "/home/ocr/ocr_jobs/input"
-output = "/home/ocr/ocr_jobs/pdf_mineru"
-raw_output = "/home/ocr/ocr_jobs/mineru_output"
-temporary = "/home/ocr/ocr_jobs/tmp/mineru_textonly_pdf"
-logs = "/home/ocr/ocr_jobs/logs_mineru"
-quality_control = "/home/ocr/ocr_jobs/qc_mineru"
-fonts = "/home/ocr/ocr_jobs/fonts"
+input = "input"
+output = "pdf_mineru"
+raw_output = "mineru_output"
+temporary = "tmp/mineru_textonly_pdf"
+logs = "logs_mineru"
+quality_control = "qc_mineru"
+fonts = "fonts"
 
 [rendering]
 dpi = 200

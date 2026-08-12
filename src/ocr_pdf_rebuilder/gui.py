@@ -21,9 +21,12 @@ from urllib.request import ProxyHandler, build_opener
 import webbrowser
 
 
-DEFAULT_INPUT_DIR = Path.home() / "ocr_jobs/input"
-DEFAULT_OUTPUT_DIR = Path.home() / "ocr_jobs/pdf_mineru"
-DEFAULT_SUMMARY_PATH = Path.home() / "ocr_jobs/logs_mineru/batch_summary.json"
+DEFAULT_RUNTIME_ROOT = Path(
+    os.environ.get("OCR_RUNTIME_ROOT", Path(__file__).resolve().parents[2])
+).expanduser().resolve()
+DEFAULT_INPUT_DIR = DEFAULT_RUNTIME_ROOT / "input"
+DEFAULT_OUTPUT_DIR = DEFAULT_RUNTIME_ROOT / "pdf_mineru"
+DEFAULT_SUMMARY_PATH = DEFAULT_RUNTIME_ROOT / "logs_mineru/batch_summary.json"
 MAX_LOG_CHARS = 400_000
 
 
@@ -74,6 +77,7 @@ class GuiController:
         current = env.get("PYTHONPATH")
         env["PYTHONPATH"] = source_root if not current else os.pathsep.join((source_root, current))
         env["PYTHONUNBUFFERED"] = "1"
+        env["OCR_RUNTIME_ROOT"] = str(DEFAULT_RUNTIME_ROOT)
         return env
 
     def _append_log(self, text: str) -> None:

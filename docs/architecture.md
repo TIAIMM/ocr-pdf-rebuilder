@@ -2,10 +2,11 @@
 
 ## Boundary
 
-The Git repository is the immutable source-and-test layer. The runtime tree at
-`/home/ocr/ocr_jobs` is the mutable data layer. Input PDFs, raw MinerU output,
-checkpoints, logs, QC renders, final PDFs, models and fonts belong only to the
-runtime layer.
+Source and mutable runtime data share one repository root. Input PDFs, raw
+MinerU output, checkpoints, logs, QC renders, final PDFs and fonts live in
+explicit top-level runtime directories and are excluded by `.gitignore`. Source,
+configuration, tests and documentation remain tracked; runtime artifacts must
+never be staged.
 
 ## Production flow
 

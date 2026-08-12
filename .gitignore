@@ -1,13 +1,19 @@
-# Runtime inputs and generated products
+# Repository-local runtime inputs and generated products
 /input/
+/pdf_mineru/
+/mineru_output/
+/logs_mineru/
+/qc_mineru/
+/tmp/
+/fonts/
+
+# Legacy/generated product names
 /pdf/
 /pdf_*/
-/mineru_output/
 /dots_output/
 /paddle_test_output/
 /qc_*/
 /logs_*/
-/tmp/
 /work/
 /artifacts/
 

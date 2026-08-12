@@ -8,20 +8,18 @@ page-aligned PDFs when image fallback is required:
   fallback pages remain blank;
 - an image variant in which those pages contain their source-page images.
 
-The repository intentionally contains source, configuration contracts, tests,
-deployment tools and documentation only. Books, generated PDFs, model weights,
-fonts, logs, checkpoints and QC renders stay in `/home/ocr/ocr_jobs`.
+Runtime directories now live directly under this repository. Books, generated
+PDFs, fonts, logs, checkpoints and QC renders are excluded by `.gitignore`; they
+remain local and must not be staged or committed.
 
-## Baseline status
+## Repository snapshot
 
-The first repository snapshot preserves the production script byte-for-byte.
-Its recorded SHA-256 is:
+The current repository renderer has a recorded SHA-256 in
+`provenance/production-baseline.json`. The original external runtime tree has
+been retired; the renderer and all ignored runtime directories now share this
+repository root.
 
-```text
-23f2bc81ffa3233e742fa47eb060918b3f9310d78adecaf52656c78f07fdd715
-```
-
-See `provenance/production-baseline.json`. Repository organization must not be
+Repository organization must not be
 treated as proof of OCR accuracy; production promotion still requires tests,
 environment verification and a same-input artifact comparison.
 
@@ -29,7 +27,6 @@ environment verification and a same-input artifact comparison.
 
 The captured production environment is:
 
-- WSL distribution name: `Ubuntu-24.04-OCR`
 - actual guest OS: Ubuntu 22.04.5 LTS
 - Python 3.12.13
 - MinerU 3.3.1
@@ -43,9 +40,10 @@ hashes are recorded under `provenance/`.
 
 Run the CPU regression suite inside the existing MinerU environment:
 
+From the repository root:
+
 ```bash
-cd /home/ocr/ocr-pdf-rebuilder
-/home/ocr/miniconda3/envs/mineru/bin/python -m unittest discover -s tests -v
+${OCR_PYTHON:-python3} -m unittest discover -s tests -v
 ```
 
 The suite uses generated temporary files and does not read production books.
@@ -87,8 +85,7 @@ hash. It never copies runtime data into the repository.
 Compare repository and production renderers on the same generated fixture:
 
 ```bash
-/home/ocr/miniconda3/envs/mineru/bin/python \
-  ./scripts/compare-synthetic-artifact.py
+${OCR_PYTHON:-python3} ./scripts/compare-synthetic-artifact.py
 ```
 
 This verifies final page count, extracted text, raster-image count and rendered
@@ -96,9 +93,10 @@ pixels, including a trailing blank page. It does not invoke MinerU or read books
 
 ## Production execution
 
+From the repository root:
+
 ```bash
-/home/ocr/miniconda3/envs/mineru/bin/python \
-  /home/ocr/ocr_jobs/mineru_textonly_pdf.py
+PYTHONPATH=./src ${OCR_PYTHON:-python3} -m ocr_pdf_rebuilder.mineru_textonly_pdf
 ```
 
 Operational details and recovery rules are in `docs/production-runbook.md` and
@@ -108,13 +106,14 @@ Operational details and recovery rules are in `docs/production-runbook.md` and
 
 Start the lightweight local web interface inside WSL:
 
+From the repository root:
+
 ```bash
-cd /home/ocr/ocr-pdf-rebuilder
 ./scripts/run-gui.sh
 ```
 
 Open `http://localhost:18765/` if the browser does not open automatically. The
-GUI lists PDFs from `/home/ocr/ocr_jobs/input`, starts the unchanged production
+GUI lists PDFs from `input/`, starts the repository
 batch, streams its console output, requests the existing safe process-group
 cleanup when stopped, displays `batch_summary.json`, and offers generated PDFs
 for download. It binds to localhost by default and has no upload or delete

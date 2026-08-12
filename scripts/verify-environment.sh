@@ -2,27 +2,34 @@
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
-python_bin="${OCR_PYTHON:-/home/ocr/miniconda3/envs/mineru/bin/python}"
-runtime_root="${OCR_RUNTIME_ROOT:-/home/ocr/ocr_jobs}"
+python_bin="${OCR_PYTHON:-}"
+if [[ -z "$python_bin" ]]; then
+    if [[ -x "$HOME/miniconda3/envs/mineru/bin/python" ]]; then
+        python_bin="$HOME/miniconda3/envs/mineru/bin/python"
+    else
+        python_bin="$(command -v python3 || true)"
+    fi
+fi
+runtime_root="${OCR_RUNTIME_ROOT:-$repo_root}"
 font_root="$runtime_root/fonts"
 failures=0
 
 pass() { printf 'PASS: %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; failures=$((failures + 1)); }
 
-if [[ -x "$python_bin" ]]; then
+if [[ -n "$python_bin" && -x "$python_bin" ]]; then
     python_version="$($python_bin -c 'import platform; print(platform.python_version())')"
     [[ "$python_version" == 3.12.* ]] && pass "Python $python_version" || fail "expected Python 3.12.x, got $python_version"
     export PATH="$(dirname -- "$python_bin"):$PATH"
 else
-    fail "missing Python executable $python_bin"
+    fail "missing MinerU Python executable; set OCR_PYTHON"
 fi
 
 for command in git mineru pdftoppm pdfinfo pdffonts dvisvgm latex sha256sum; do
     command -v "$command" >/dev/null 2>&1 && pass "command $command" || fail "missing command $command"
 done
 
-if [[ -x "$python_bin" ]]; then
+if [[ -n "$python_bin" && -x "$python_bin" ]]; then
     "$python_bin" - "$repo_root" <<'PY' || failures=$((failures + 1))
 import importlib.metadata as metadata
 import pathlib

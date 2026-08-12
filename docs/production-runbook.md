@@ -3,27 +3,25 @@
 ## Preflight
 
 ```bash
-cd /home/ocr/ocr-pdf-rebuilder
 ./scripts/verify-environment.sh
-/home/ocr/miniconda3/envs/mineru/bin/python -m unittest discover -s tests -v
+${OCR_PYTHON:-python3} -m unittest discover -s tests -v
 ./scripts/deploy-to-wsl.sh
 ```
 
 Review the dry-run hashes, then deploy with `--apply` only when the proposed
 source is the tested source.
 
-Confirm input PDFs are under `/home/ocr/ocr_jobs/input` and that the output,
+Confirm input PDFs are under `input/` and that the output,
 temporary, log and QC volumes have enough free space. Do not place inputs or
 outputs inside the Git checkout.
 
 ## Run
 
 ```bash
-/home/ocr/miniconda3/envs/mineru/bin/python \
-  /home/ocr/ocr_jobs/mineru_textonly_pdf.py
+PYTHONPATH=./src ${OCR_PYTHON:-python3} -m ocr_pdf_rebuilder.mineru_textonly_pdf
 ```
 
-The batch summary is `/home/ocr/ocr_jobs/logs_mineru/batch_summary.json`.
+The batch summary is `logs_mineru/batch_summary.json`.
 Individual failures are reported there and do not prevent later files from
 being attempted. The process exits nonzero if the completed batch contains any
 failed file.
@@ -31,7 +29,6 @@ failed file.
 For the local browser GUI, run:
 
 ```bash
-cd /home/ocr/ocr-pdf-rebuilder
 ./scripts/run-gui.sh
 ```
 

@@ -29,7 +29,7 @@ checkpoint when deliberately forcing recomputation; retain its log for diagnosis
 
 ## Deployment rollback
 
-Changed deployments create a timestamped copy under
-`/home/ocr/ocr_jobs/.deploy-backups`. Restore only the exact intended file and
+Changed deployments create a timestamped `.deploy-backups` copy under the
+explicit deployment target. Restore only the exact intended file and
 verify SHA-256 before running. Backups are runtime artifacts and must not be
 committed.

@@ -3,12 +3,12 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 source_path="$repo_root/src/ocr_pdf_rebuilder/mineru_textonly_pdf.py"
-target_root="${OCR_RUNTIME_ROOT:-/home/ocr/ocr_jobs}"
+target_root="${OCR_DEPLOY_ROOT:-$repo_root/src/ocr_pdf_rebuilder}"
 apply=0
 
 usage() {
     cat <<'EOF'
-Usage: deploy-to-wsl.sh [--apply] [--target /home/ocr/ocr_jobs]
+Usage: deploy-to-wsl.sh [--apply] [--target DIRECTORY]
 
 Without --apply the command is a read-only dry run. An applied deployment
 backs up changed content and installs the tested source with an atomic rename.
@@ -28,14 +28,21 @@ done
 
 [[ -f "$source_path" ]] || { printf 'missing source: %s\n' "$source_path" >&2; exit 2; }
 target_root="$(realpath -m -- "$target_root")"
-case "$target_root" in
-    /home/ocr/*) ;;
-    *) printf 'refusing target outside /home/ocr: %s\n' "$target_root" >&2; exit 2 ;;
+case "$target_root/" in
+    "$repo_root/"*) ;;
+    *) printf 'refusing target outside repository: %s\n' "$target_root" >&2; exit 2 ;;
 esac
 
 target_path="$target_root/mineru_textonly_pdf.py"
-python_bin="${OCR_PYTHON:-/home/ocr/miniconda3/envs/mineru/bin/python}"
-[[ -x "$python_bin" ]] || { printf 'missing Python: %s\n' "$python_bin" >&2; exit 2; }
+python_bin="${OCR_PYTHON:-}"
+if [[ -z "$python_bin" ]]; then
+    if [[ -x "$HOME/miniconda3/envs/mineru/bin/python" ]]; then
+        python_bin="$HOME/miniconda3/envs/mineru/bin/python"
+    else
+        python_bin="$(command -v python3 || true)"
+    fi
+fi
+[[ -n "$python_bin" && -x "$python_bin" ]] || { printf 'missing Python; set OCR_PYTHON\n' >&2; exit 2; }
 "$python_bin" - "$source_path" <<'PY'
 import pathlib, sys
 path = pathlib.Path(sys.argv[1])

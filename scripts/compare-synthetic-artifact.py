@@ -25,6 +25,10 @@ DEFAULT_FONT_ROOT = REPOSITORY_ROOT / "fonts"
 
 def load_module(name: str, source: Path, home: Path):
     previous_home = os.environ.get("HOME")
+    package_source_root = str(source.resolve().parent.parent)
+    added_source_root = package_source_root not in sys.path
+    if added_source_root:
+        sys.path.insert(0, package_source_root)
     os.environ["HOME"] = str(home)
     try:
         spec = importlib.util.spec_from_file_location(name, source)
@@ -39,6 +43,8 @@ def load_module(name: str, source: Path, home: Path):
             os.environ.pop("HOME", None)
         else:
             os.environ["HOME"] = previous_home
+        if added_source_root:
+            sys.path.remove(package_source_root)
 
 
 def configure_fonts(module, font_root: Path):

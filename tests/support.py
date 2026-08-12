@@ -7,10 +7,14 @@ import sys
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SOURCE_PATH = REPOSITORY_ROOT / "src/ocr_pdf_rebuilder/mineru_textonly_pdf.py"
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+SOURCE_PATH = SOURCE_ROOT / "ocr_pdf_rebuilder/mineru_textonly_pdf.py"
 
 
 def load_pipeline(home: Path):
+    source_root = str(SOURCE_ROOT)
+    if source_root not in sys.path:
+        sys.path.insert(0, source_root)
     previous_home = os.environ.get("HOME")
     previous_runtime_root = os.environ.get("OCR_RUNTIME_ROOT")
     os.environ["HOME"] = str(home)

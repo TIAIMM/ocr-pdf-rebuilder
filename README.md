@@ -23,6 +23,44 @@ Repository organization must not be
 treated as proof of OCR accuracy; production promotion still requires tests,
 environment verification and a same-input artifact comparison.
 
+## Pipeline modules
+
+`ocr_pdf_rebuilder.mineru_textonly_pdf` remains the stable CLI entry point and
+now only wires dependencies, retains compatibility helpers and launches the
+batch. Focused components have no dependency back to the CLI entry point:
+
+- `pipeline_config.py`: runtime paths, production settings and shared patterns;
+- `runtime_state.py`: source/runtime fingerprints, checkpoints and completed
+  output validation;
+- `process_control.py`: streamed child-process execution, timeout handling and
+  descendant process-group cleanup;
+- `mineru_runner.py`: MinerU command construction, retries, page chunking and
+  resumable parser runs;
+- `mineru_results.py`: MinerU JSON selection, normalization and page-result
+  loading;
+- `text_processing.py`: OCR text cleanup, Markdown/LaTeX normalization and
+  formula preparation;
+- `page_recovery.py`: bad-page retries, forward-page leak repair and safe image
+  or source-text fallbacks;
+- `layout_engine.py`: cell-to-block conversion, fitting, reflow and Markdown
+  reconstruction;
+- `reportlab_renderer.py`: font selection, measurement and PDF drawing;
+- `qc_reporting.py`: suspect-page analysis, debug artifacts and QC reports;
+- `pipeline_orchestrator.py`: one-document production flow and workspace
+  lifecycle;
+- `batch_runner.py`: multi-file iteration, failure isolation and atomic batch
+  summary updates;
+- `forward_page_leak.py`: source-page overlap detection and isolated-retry
+  validation for forward-page content leaks;
+- `pdf_validation.py`: read-only page-count, image, blank-page, character and
+  markup validation of generated artifacts;
+- `gui.py`: local HTTP controller, per-file progress parsing and browser UI.
+
+`component_runtime.py` supplies the small dependency-injection compatibility
+bridge used by extracted components. The entry module keeps established helper
+names, including test and diagnostic monkeypatch points, while component
+implementations remain independently importable and compile-testable.
+
 ## Runtime
 
 The captured production environment is:
@@ -116,8 +154,9 @@ Open `http://localhost:18765/` if the browser does not open automatically. The
 GUI lists PDFs from `input/`, starts the repository
 batch, streams its console output, requests the existing safe process-group
 cleanup when stopped, displays `batch_summary.json`, and offers generated PDFs
-for download. It binds to localhost by default and has no upload or delete
-operation.
+for download. Per-file progress shows the active stage, weighted total percent,
+and current/total page count. It binds to localhost by default and has no upload
+or delete operation.
 
 ## License status
 

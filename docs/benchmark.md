@@ -17,6 +17,12 @@ the same source set and record:
 - rendered-page review for representative normal, formula, table, multilingual,
   low-quality scan, handwriting and trailing-blank pages.
 
-For the initial repository import, the required comparison is stricter: the
-repository source and deployed production source must be byte-identical. The
-script `scripts/compare-baseline.sh` enforces that gate without running MinerU.
+For the initial repository import, two gates apply:
+
+- `scripts/compare-baseline.sh` requires repository and production source to be
+  byte-identical;
+- `scripts/compare-synthetic-artifact.py` renders the same multilingual fixture
+  through both copies and compares page count, extracted text, raster-image
+  count and rendered pixels, including a trailing blank page.
+
+Neither gate invokes MinerU or reads production books.

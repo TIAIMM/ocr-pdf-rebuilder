@@ -79,6 +79,12 @@ else
     fail "repository/production baseline comparison"
 fi
 
+if "$python_bin" "$repo_root/scripts/compare-synthetic-artifact.py"; then
+    pass "repository/production synthetic artifact comparison"
+else
+    fail "repository/production synthetic artifact comparison"
+fi
+
 if (( failures > 0 )); then
     printf 'Environment verification failed with %d issue(s).\n' "$failures" >&2
     exit 1

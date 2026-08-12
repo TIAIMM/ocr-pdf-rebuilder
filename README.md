@@ -84,6 +84,16 @@ The script compiles the source, compares hashes, creates a timestamped backup
 when content changes, installs through an atomic rename, and verifies the final
 hash. It never copies runtime data into the repository.
 
+Compare repository and production renderers on the same generated fixture:
+
+```bash
+/home/ocr/miniconda3/envs/mineru/bin/python \
+  ./scripts/compare-synthetic-artifact.py
+```
+
+This verifies final page count, extracted text, raster-image count and rendered
+pixels, including a trailing blank page. It does not invoke MinerU or read books.
+
 ## Production execution
 
 ```bash

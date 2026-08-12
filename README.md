@@ -113,7 +113,7 @@ cd /home/ocr/ocr-pdf-rebuilder
 ./scripts/run-gui.sh
 ```
 
-Open `http://localhost:8765/` if the browser does not open automatically. The
+Open `http://localhost:18765/` if the browser does not open automatically. The
 GUI lists PDFs from `/home/ocr/ocr_jobs/input`, starts the unchanged production
 batch, streams its console output, requests the existing safe process-group
 cleanup when stopped, displays `batch_summary.json`, and offers generated PDFs

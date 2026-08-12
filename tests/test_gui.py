@@ -15,7 +15,11 @@ import unittest
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
-from ocr_pdf_rebuilder.gui import GuiController, make_handler  # noqa: E402
+from ocr_pdf_rebuilder.gui import (  # noqa: E402
+    GuiController,
+    GuiHttpServer,
+    make_handler,
+)
 
 
 class GuiControllerTests(unittest.TestCase):
@@ -127,6 +131,9 @@ class GuiControllerTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=3)
+
+    def test_gui_server_enables_safe_address_reuse(self):
+        self.assertTrue(GuiHttpServer.allow_reuse_address)
 
 
 if __name__ == "__main__":

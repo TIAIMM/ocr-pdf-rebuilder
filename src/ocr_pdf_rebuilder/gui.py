@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import codecs
 from collections import deque
+import errno
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -16,6 +17,7 @@ import sys
 import threading
 import time
 from urllib.parse import quote, unquote, urlparse
+from urllib.request import ProxyHandler, build_opener
 import webbrowser
 
 
@@ -23,6 +25,10 @@ DEFAULT_INPUT_DIR = Path.home() / "ocr_jobs/input"
 DEFAULT_OUTPUT_DIR = Path.home() / "ocr_jobs/pdf_mineru"
 DEFAULT_SUMMARY_PATH = Path.home() / "ocr_jobs/logs_mineru/batch_summary.json"
 MAX_LOG_CHARS = 400_000
+
+
+class GuiHttpServer(ThreadingHTTPServer):
+    allow_reuse_address = True
 
 
 def file_record(path: Path) -> dict[str, object]:
@@ -420,10 +426,24 @@ def make_handler(controller: GuiController, csrf_token: str):
     return Handler
 
 
+def existing_gui_is_responding(url: str) -> bool:
+    opener = build_opener(ProxyHandler({}))
+    try:
+        with opener.open(url.rstrip("/") + "/api/status", timeout=1.5) as response:
+            payload = json.load(response)
+    except (OSError, ValueError):
+        return False
+    return (
+        isinstance(payload, dict)
+        and payload.get("input_dir") == str(DEFAULT_INPUT_DIR)
+        and payload.get("output_dir") == str(DEFAULT_OUTPUT_DIR)
+    )
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="OCR PDF Rebuilder 本地网页 GUI")
     parser.add_argument("--host", default="127.0.0.1", help="监听地址（默认：127.0.0.1）")
-    parser.add_argument("--port", type=int, default=8765, help="监听端口（默认：8765）")
+    parser.add_argument("--port", type=int, default=18765, help="监听端口（默认：18765）")
     parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     return parser.parse_args(argv)
 
@@ -432,8 +452,21 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     controller = GuiController()
     csrf_token = secrets.token_urlsafe(24)
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(controller, csrf_token))
     host_for_url = "localhost" if args.host in {"0.0.0.0", "127.0.0.1"} else args.host
+    requested_url = f"http://{host_for_url}:{args.port}/"
+    try:
+        server = GuiHttpServer((args.host, args.port), make_handler(controller, csrf_token))
+    except OSError as exc:
+        if exc.errno != errno.EADDRINUSE:
+            raise
+        if existing_gui_is_responding(requested_url):
+            print(f"OCR PDF GUI 已在运行：{requested_url}", flush=True)
+            if not args.no_browser:
+                webbrowser.open(requested_url)
+            return
+        raise SystemExit(
+            f"无法启动 OCR PDF GUI：端口 {args.port} 已被其他程序占用。"
+        ) from None
     url = f"http://{host_for_url}:{server.server_port}/"
     print(f"OCR PDF GUI 已启动：{url}", flush=True)
     print("按 Ctrl+C 关闭 GUI；正在运行的生成任务需先在页面中安全停止。", flush=True)

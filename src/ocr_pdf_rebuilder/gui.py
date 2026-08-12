@@ -74,8 +74,15 @@ class GuiController:
     def _source_environment() -> dict[str, str]:
         env = os.environ.copy()
         source_root = str(Path(__file__).resolve().parents[1])
+        python_bin_dir = str(Path(sys.executable).resolve().parent)
         current = env.get("PYTHONPATH")
         env["PYTHONPATH"] = source_root if not current else os.pathsep.join((source_root, current))
+        current_path = env.get("PATH")
+        env["PATH"] = (
+            python_bin_dir
+            if not current_path
+            else os.pathsep.join((python_bin_dir, current_path))
+        )
         env["PYTHONUNBUFFERED"] = "1"
         env["OCR_RUNTIME_ROOT"] = str(DEFAULT_RUNTIME_ROOT)
         return env

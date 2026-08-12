@@ -57,6 +57,11 @@ class GuiControllerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "没有 PDF"):
             controller.start()
 
+    def test_child_path_prioritizes_current_python_environment(self):
+        env = GuiController._source_environment()
+        first_path = Path(env["PATH"].split(os.pathsep, 1)[0])
+        self.assertEqual(first_path, Path(sys.executable).resolve().parent)
+
     def test_run_captures_utf8_log_and_exit_state(self):
         (self.input_dir / "sample.pdf").write_bytes(b"fixture")
         command = [sys.executable, "-u", "-c", "print('生成完成')"]

@@ -19,4 +19,5 @@ fi
 
 export PYTHONPATH="$repo_root/src${PYTHONPATH:+:$PYTHONPATH}"
 export OCR_RUNTIME_ROOT="${OCR_RUNTIME_ROOT:-$repo_root}"
+export PATH="$(dirname -- "$python_bin")${PATH:+:$PATH}"
 exec "$python_bin" -m ocr_pdf_rebuilder.gui "$@"

@@ -1,13 +1,134 @@
 {
-  "schema": 1,
-  "captured_at": "2026-08-12",
-  "source_path_at_capture": "src/ocr_pdf_rebuilder/mineru_textonly_pdf.py",
-  "repository_path": "src/ocr_pdf_rebuilder/mineru_textonly_pdf.py",
-  "sha256": "3f304596c559eb37757f6926af8a910d1f65fca881f962a328ac562e579ceff2",
-  "bytes": 267844,
-  "lines": 7609,
-  "output_version": "mineru-reportlab-cell-aware-render-v51-dual-text-image-outputs",
-  "python": "3.12.13",
-  "mineru": "3.3.1",
-  "model": "OpenDataLab/MinerU2.5-Pro-2605-1.2B"
+  "schema": 2,
+  "captured_at": "2026-08-12T13:51:33.942896+00:00",
+  "repository_path": "src/ocr_pdf_rebuilder",
+  "package_identity": {
+    "schema": 1,
+    "algorithm": "sha256-canonical-file-manifest-v1",
+    "package": "ocr_pdf_rebuilder",
+    "file_count": 24,
+    "files_sha256": "ea714953bbd56cdde3f1c3e9b0dcb315d00647f29432a7b6cb4b751f41b27cd1",
+    "files": [
+      {
+        "path": "__init__.py",
+        "size": 77,
+        "sha256": "30dc5fc2cecc034aae4698db4d309a5f8047aca6c0cebe4c6435058e718eb86b"
+      },
+      {
+        "path": "batch_runner.py",
+        "size": 4572,
+        "sha256": "c63692a3be3780b822de344dffa078f9aa33b1f65db39e047c3113287806ecda"
+      },
+      {
+        "path": "code_identity.py",
+        "size": 2498,
+        "sha256": "51fdf00a5ed735b0744c9e050834c3dd289618142d9dc85bf1aeedf7d5057466"
+      },
+      {
+        "path": "component_runtime.py",
+        "size": 3357,
+        "sha256": "de00b83efefacf0268bfd365acccbc13903df09d0ff6140c1d8527d6d9050a3c"
+      },
+      {
+        "path": "forward_page_leak.py",
+        "size": 8904,
+        "sha256": "bde9131121201eb6ad065ef2bb5dc50a68ab3557f1a22208be50ea0f3d172ef4"
+      },
+      {
+        "path": "gui.py",
+        "size": 39672,
+        "sha256": "fae779dbf9d1eb8a5d918fc1ba8ab6522d33dfb255fe445bbf76fc9e32f8eadd"
+      },
+      {
+        "path": "layout_engine.py",
+        "size": 39463,
+        "sha256": "efd3bc134c7d058039dadf80100e344e3436d67b2b8283aa54a0034c6af846ff"
+      },
+      {
+        "path": "mineru_pipeline.py",
+        "size": 1126,
+        "sha256": "9abc92defc3c4bdb7a4a3bc2183c5ee34a84a0905f2352cccb388174d4d976db"
+      },
+      {
+        "path": "mineru_results.py",
+        "size": 44695,
+        "sha256": "aa0729a6777bb747caaad3155209b88c7465aab836b2aea703b5f286c204283c"
+      },
+      {
+        "path": "mineru_runner.py",
+        "size": 19219,
+        "sha256": "bb23e6cb1394921076114e0576546b278318a0f8e1b9a5ed11f639f55badef0a"
+      },
+      {
+        "path": "paddle_pipeline.py",
+        "size": 34100,
+        "sha256": "ef1491017aae58d8361fc26fcab819cb9b7d70f8034479988f62c23abcce1639"
+      },
+      {
+        "path": "paddle_textonly_pdf.py",
+        "size": 495,
+        "sha256": "d90d6bfa764e80172f23b5ec86a24e92f7cc24aec79ac89670e9648eb0395bec"
+      },
+      {
+        "path": "paddle_worker.py",
+        "size": 10900,
+        "sha256": "ffb7dd108bca3763361e3085410aa52a2693a54a7bbb28c3e1cd31795618d1b4"
+      },
+      {
+        "path": "page_recovery.py",
+        "size": 19656,
+        "sha256": "f925034df44eef13da80d5bc53f0c5d85e97d7360e9d067b1ab40779672228d8"
+      },
+      {
+        "path": "pdf_validation.py",
+        "size": 8747,
+        "sha256": "8da5c21f3084a128542788bfb68022c5e8fbfdcc50c11faf5f9828d80a78f1a4"
+      },
+      {
+        "path": "pipeline_config.py",
+        "size": 6517,
+        "sha256": "114b03fc50a57db382139ac882b148d5cb496e9d47c556faefbf4c228308fc03"
+      },
+      {
+        "path": "pipeline_orchestrator.py",
+        "size": 14666,
+        "sha256": "391ce62bb09d68948fa5366f2933fee7bd8dfb365083396aeaf6f1d36b5e005e"
+      },
+      {
+        "path": "pipeline_runtime.py",
+        "size": 12152,
+        "sha256": "33787dbe65ead70afdd4cd7969ff8f6f847c610453398536912abb6c20053fcf"
+      },
+      {
+        "path": "process_control.py",
+        "size": 10786,
+        "sha256": "d1bb94a5db2f836fad41229e37fdbbafae9c5db77b8e530b328ffe8fee616f33"
+      },
+      {
+        "path": "qc_reporting.py",
+        "size": 12194,
+        "sha256": "1702166e1306c82769d4c82cab1f84b2624df75b9ddb1d9186074db27af50f44"
+      },
+      {
+        "path": "reportlab_renderer.py",
+        "size": 46412,
+        "sha256": "0c5fedcf74ae0b01952ef5ec4cc23bb59d91a65a9169486c15bee426da6d2eab"
+      },
+      {
+        "path": "runtime_state.py",
+        "size": 16647,
+        "sha256": "d6a7146262725370b0927ea45bc193bf94acb372d8e9f5c8964eccfb2d161647"
+      },
+      {
+        "path": "signal_cleanup.py",
+        "size": 670,
+        "sha256": "6621e4dc787d26532273e40fd9cff4d4b9346124bb68f96706d48341af57aea4"
+      },
+      {
+        "path": "text_processing.py",
+        "size": 52841,
+        "sha256": "a85578b1826a4b83e8d8c0380fbb892593fcee8a22f3ed664b09c69d637f487a"
+      }
+    ]
+  }
 }

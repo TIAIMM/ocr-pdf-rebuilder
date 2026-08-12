@@ -14,6 +14,10 @@ import time
 
 import fitz
 
+from .code_identity import (
+    current_package_source_identity,
+    current_package_source_identity_hash,
+)
 from .component_runtime import ComponentRuntime
 from .pipeline_config import *
 
@@ -354,6 +358,8 @@ def completed_output_state_matches(
         not state
         or state.get("schema") != MINERU_CHECKPOINT_SCHEMA
         or state.get("output_version") != OUTPUT_VERSION
+        or state.get("implementation_identity_hash")
+        != current_package_source_identity_hash()
         or not completed_runtime_identity_matches(state)
     ):
         return False
@@ -420,6 +426,8 @@ def write_completed_output_state(
             "schema": MINERU_CHECKPOINT_SCHEMA,
             "output_version": OUTPUT_VERSION,
             "source": source_file_signature(pdf_path),
+            "implementation_identity_hash": current_package_source_identity_hash(),
+            "implementation_identity": current_package_source_identity(),
             "runtime_identity_hash": mineru_runtime_identity_hash(),
             "runtime_identity": mineru_runtime_identity(),
             "text_pdf": text_signature,
@@ -439,6 +447,7 @@ def checkpoint_identity(pdf_path, start_page, end_page, table_enabled=None):
         "start_page": int(start_page),
         "end_page": int(end_page),
         "parser_config_hash": mineru_parser_config_hash(table_enabled=table_enabled),
+        "implementation_identity_hash": current_package_source_identity_hash(),
         "runtime_identity_hash": mineru_runtime_identity_hash(),
     }
 
@@ -469,6 +478,8 @@ _COMPONENT_EXPORTS = (
     "mineru_parser_config",
     "mineru_parser_config_hash",
     "stable_json_hash",
+    "current_package_source_identity",
+    "current_package_source_identity_hash",
     "cached_file_sha256",
     "file_integrity_signature",
     "file_content_signature",

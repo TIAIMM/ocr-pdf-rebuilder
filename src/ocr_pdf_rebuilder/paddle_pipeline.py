@@ -252,6 +252,7 @@ def completion_matches(
         "output_version": OUTPUT_VERSION,
         "source": shared.source_file_signature(source_pdf),
         "config_hash": paddle_config_hash(),
+        "implementation_identity_hash": shared.current_package_source_identity_hash(),
         "runtime_identity_hash": paddle_runtime_identity_hash(),
     }
     if any(state.get(key) != value for key, value in expected.items()):
@@ -291,6 +292,8 @@ def write_completion_state(
         "source": shared.source_file_signature(source_pdf),
         "config": paddle_config(),
         "config_hash": paddle_config_hash(),
+        "implementation_identity": shared.current_package_source_identity(),
+        "implementation_identity_hash": shared.current_package_source_identity_hash(),
         "runtime_identity": identity,
         "runtime_identity_hash": shared.stable_json_hash(identity),
         "output_pdf": shared.pdf_artifact_signature(output_pdf),
@@ -313,6 +316,7 @@ def prepare_workspace(pdf_path: Path, work_dir: Path, raw_dir: Path) -> bool:
         "schema": CHECKPOINT_SCHEMA,
         "source": shared.source_file_signature(pdf_path),
         "config_hash": paddle_config_hash(),
+        "implementation_identity_hash": shared.current_package_source_identity_hash(),
         "runtime_identity_hash": paddle_runtime_identity_hash(),
     }
     state = shared.read_checkpoint(state_path)
@@ -336,6 +340,7 @@ def prepare_workspace(pdf_path: Path, work_dir: Path, raw_dir: Path) -> bool:
         {
             **expected,
             "status": "active",
+            "implementation_identity": shared.current_package_source_identity(),
             "runtime_identity": paddle_runtime_identity(),
             "updated_at": time.time(),
         },

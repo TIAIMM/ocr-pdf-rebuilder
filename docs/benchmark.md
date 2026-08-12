@@ -19,7 +19,8 @@ the same source set and record:
 
 For the initial repository import, two gates apply:
 
-- `scripts/compare-baseline.sh` requires repository and production source to be
+- `scripts/compare-baseline.sh` requires the recorded per-file manifest,
+  repository package and independently deployed production package to be
   byte-identical;
 - `scripts/compare-synthetic-artifact.py` renders the same multilingual fixture
   through both copies and compares page count, extracted text, raster-image

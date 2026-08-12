@@ -19,7 +19,9 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REPOSITORY_SOURCE = (
     REPOSITORY_ROOT / "src/ocr_pdf_rebuilder/pipeline_runtime.py"
 )
-DEFAULT_PRODUCTION_SOURCE = DEFAULT_REPOSITORY_SOURCE
+DEFAULT_PRODUCTION_SOURCE = (
+    REPOSITORY_ROOT / ".production/src/ocr_pdf_rebuilder/pipeline_runtime.py"
+)
 DEFAULT_FONT_ROOT = REPOSITORY_ROOT / "fonts"
 
 

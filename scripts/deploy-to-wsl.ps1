@@ -26,7 +26,7 @@ if (-not $Distribution -or -not $Repository) {
     throw "Could not derive WSL distribution/repository. Pass -Distribution and -Repository."
 }
 if (-not $Target) {
-    $Target = "$Repository/src/ocr_pdf_rebuilder"
+    $Target = "$Repository/.production/src/ocr_pdf_rebuilder"
 }
 
 $arguments = @(

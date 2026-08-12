@@ -48,6 +48,7 @@ def prepare_resumable_job_workspace(pdf_path, work_dir, mineru_dir):
         "schema": MINERU_CHECKPOINT_SCHEMA,
         "source": source_file_signature(pdf_path),
         "parser_config_hash": mineru_parser_config_hash(),
+        "implementation_identity_hash": current_package_source_identity_hash(),
         "runtime_identity_hash": mineru_runtime_identity_hash(),
     }
     existing = read_checkpoint(state_path)
@@ -73,6 +74,7 @@ def prepare_resumable_job_workspace(pdf_path, work_dir, mineru_dir):
         {
             **expected,
             "status": "active",
+            "implementation_identity": current_package_source_identity(),
             "runtime_identity": mineru_runtime_identity(),
             "updated_at": time.time(),
         },
@@ -363,4 +365,3 @@ def component_exports():
 
 def invoke_component(name, namespace, *args, **kwargs):
     return _COMPONENT_RUNTIME.invoke(name, namespace, *args, **kwargs)
-

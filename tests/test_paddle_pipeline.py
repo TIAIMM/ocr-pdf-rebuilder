@@ -17,6 +17,54 @@ from ocr_pdf_rebuilder import paddle_pipeline, paddle_worker
 
 
 class PaddlePipelineTests(unittest.TestCase):
+    def test_completion_state_records_implementation_identity(self):
+        captured = {}
+        implementation = {"schema": 1, "files_sha256": "c" * 64, "files": []}
+        runtime = {"schema": 1, "worker": {}}
+        with (
+            mock.patch.object(paddle_pipeline, "paddle_runtime_identity", return_value=runtime),
+            mock.patch.object(
+                paddle_pipeline.shared,
+                "current_package_source_identity",
+                return_value=implementation,
+            ),
+            mock.patch.object(
+                paddle_pipeline.shared,
+                "current_package_source_identity_hash",
+                return_value="c" * 64,
+            ),
+            mock.patch.object(
+                paddle_pipeline.shared,
+                "source_file_signature",
+                return_value={"sha256": "s" * 64},
+            ),
+            mock.patch.object(
+                paddle_pipeline.shared,
+                "pdf_artifact_signature",
+                return_value={"sha256": "p" * 64},
+            ),
+            mock.patch.object(
+                paddle_pipeline.shared,
+                "file_integrity_signature",
+                return_value={"sha256": "m" * 64},
+            ),
+            mock.patch.object(
+                paddle_pipeline.shared,
+                "write_checkpoint",
+                side_effect=lambda _path, payload: captured.update(payload),
+            ),
+        ):
+            paddle_pipeline.write_completion_state(
+                Path("state"),
+                Path("source.pdf"),
+                Path("output.pdf"),
+                Path("output.md"),
+                Path("output-images.pdf"),
+                [],
+            )
+        self.assertEqual(captured["implementation_identity"], implementation)
+        self.assertEqual(captured["implementation_identity_hash"], "c" * 64)
+
     def test_explicit_image_bbox_is_scaled_even_when_values_resemble_pdf_units(self):
         cell = {
             "bbox": [485.0, 2149.0, 555.0, 2220.0],

@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 from support import load_pipeline
+from ocr_pdf_rebuilder.code_identity import package_source_identity
 
 
 class CheckpointIntegrityTests(unittest.TestCase):
@@ -34,6 +35,75 @@ class CheckpointIntegrityTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.pipeline.write_checkpoint(
                 self.root / "bad.json", {"_checkpoint_sha256": "forged"}
+            )
+
+    def test_package_source_identity_is_path_independent_and_content_sensitive(self):
+        first = self.root / "first/ocr_pdf_rebuilder"
+        second = self.root / "second/ocr_pdf_rebuilder"
+        first.mkdir(parents=True)
+        second.mkdir(parents=True)
+        for package in (first, second):
+            (package / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+            (package / "worker.py").write_text("def run(): return 1\n", encoding="utf-8")
+        self.assertEqual(package_source_identity(first), package_source_identity(second))
+
+        (second / "worker.py").write_text("def run(): return 2\n", encoding="utf-8")
+        self.assertNotEqual(
+            package_source_identity(first)["files_sha256"],
+            package_source_identity(second)["files_sha256"],
+        )
+
+    def test_mineru_checkpoint_identity_binds_current_implementation(self):
+        source = self.root / "source.pdf"
+        source.write_bytes(b"source")
+        with (
+            mock.patch.object(
+                self.pipeline,
+                "source_file_signature",
+                return_value={"path": "source.pdf", "size": 6, "sha256": "a" * 64},
+            ),
+            mock.patch.object(
+                self.pipeline,
+                "mineru_parser_config_hash",
+                return_value="b" * 64,
+            ),
+            mock.patch.object(
+                self.pipeline,
+                "current_package_source_identity_hash",
+                return_value="c" * 64,
+            ),
+            mock.patch.object(
+                self.pipeline,
+                "mineru_runtime_identity_hash",
+                return_value="d" * 64,
+            ),
+        ):
+            identity = self.pipeline.checkpoint_identity(source, 0, 9)
+        self.assertEqual(identity["implementation_identity_hash"], "c" * 64)
+
+    def test_mineru_completion_without_current_implementation_is_rejected(self):
+        state_path = self.root / "output.version"
+        self.pipeline.write_checkpoint(
+            state_path,
+            {
+                "schema": self.pipeline.MINERU_CHECKPOINT_SCHEMA,
+                "output_version": self.pipeline.OUTPUT_VERSION,
+                "implementation_identity_hash": "a" * 64,
+            },
+        )
+        with mock.patch.object(
+            self.pipeline,
+            "current_package_source_identity_hash",
+            return_value="b" * 64,
+        ):
+            self.assertFalse(
+                self.pipeline.completed_output_state_matches(
+                    state_path,
+                    self.root / "source.pdf",
+                    self.root / "output.pdf",
+                    self.root / "output.md",
+                    self.root / "output-images.pdf",
+                )
             )
 
     def test_timestamp_only_runtime_changes_do_not_invalidate_completion(self):

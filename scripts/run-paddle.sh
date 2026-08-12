@@ -28,7 +28,14 @@ if [[ "$backend" == "vllm-server" && ! -x "$vllm_python" ]]; then
     exit 1
 fi
 
-export PYTHONPATH="$repo_root/src${PYTHONPATH:+:$PYTHONPATH}"
+source_root="${OCR_SOURCE_ROOT:-$repo_root/.production/src}"
+[[ -f "$source_root/ocr_pdf_rebuilder/__init__.py" ]] || {
+    printf 'Deployed OCR package not found: %s\n' "$source_root/ocr_pdf_rebuilder" >&2
+    printf 'Run ./scripts/deploy-to-wsl.sh --apply after recording the reviewed baseline.\n' >&2
+    exit 1
+}
+
+export PYTHONPATH="$source_root${PYTHONPATH:+:$PYTHONPATH}"
 export OCR_RUNTIME_ROOT="${OCR_RUNTIME_ROOT:-$repo_root}"
 export PADDLEOCR_PYTHON="$paddle_python"
 export PADDLEOCR_VL_BACKEND="$backend"

@@ -3,22 +3,26 @@
 ## Preflight
 
 ```bash
-./scripts/verify-environment.sh
 ${OCR_PYTHON:-python3} -m unittest discover -s tests -v
+${OCR_PYTHON:-python3} ./scripts/update-production-baseline.py
 ./scripts/deploy-to-wsl.sh
+./scripts/deploy-to-wsl.sh --apply
+./scripts/verify-environment.sh
 ```
 
-Review the dry-run hashes, then deploy with `--apply` only when the proposed
-source is the tested source.
+Record the baseline only after reviewing a passing source tree. Review the
+dry-run package hashes, then deploy with `--apply`. Deployment refuses any
+repository source that differs from the recorded per-file manifest.
 
 Confirm input PDFs are under `input/` and that the output,
-temporary, log and QC volumes have enough free space. Do not place inputs or
-outputs inside the Git checkout.
+temporary, log and QC volumes have enough free space. These repository-local
+runtime directories are intentionally ignored and must remain untracked.
 
 ## Run
 
 ```bash
-PYTHONPATH=./src ${OCR_PYTHON:-python3} -m ocr_pdf_rebuilder.mineru_pipeline
+PYTHONPATH=./.production/src OCR_RUNTIME_ROOT="$PWD" \
+  ${OCR_PYTHON:-python3} -m ocr_pdf_rebuilder.mineru_pipeline
 ```
 
 PaddleOCR-VL-first production uses the same input and reconstruction runtime,
@@ -64,6 +68,8 @@ after 30 seconds it escalates termination. Wait for the status to leave
 - formula, table, footnote and reading-order suspect pages are reviewed from QC;
 - no MinerU, Paddle worker or Paddle vLLM process group remains;
 - completed-state reuse succeeds on an unchanged rerun.
+- a source-code change rejects old intermediate checkpoints and completion
+  markers until the affected document is regenerated.
 
 Page-count equality is necessary but does not prove visual or textual quality.
 Representative rendered-page inspection remains part of production acceptance.

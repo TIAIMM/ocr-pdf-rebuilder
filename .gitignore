@@ -87,3 +87,4 @@ desktop.ini
 
 # Deployment backups must stay in the runtime tree
 /.deploy-backups/
+/.production/

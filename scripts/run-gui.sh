@@ -17,7 +17,14 @@ if [[ -z "$python_bin" || ! -x "$python_bin" ]]; then
   exit 1
 fi
 
-export PYTHONPATH="$repo_root/src${PYTHONPATH:+:$PYTHONPATH}"
+source_root="${OCR_SOURCE_ROOT:-$repo_root/.production/src}"
+if [[ ! -f "$source_root/ocr_pdf_rebuilder/__init__.py" ]]; then
+  echo "Deployed OCR package not found: $source_root/ocr_pdf_rebuilder" >&2
+  echo "Run ./scripts/deploy-to-wsl.sh --apply after recording the reviewed baseline." >&2
+  exit 1
+fi
+
+export PYTHONPATH="$source_root${PYTHONPATH:+:$PYTHONPATH}"
 export OCR_RUNTIME_ROOT="${OCR_RUNTIME_ROOT:-$repo_root}"
 export PATH="$(dirname -- "$python_bin")${PATH:+:$PATH}"
 exec "$python_bin" -m ocr_pdf_rebuilder.gui "$@"

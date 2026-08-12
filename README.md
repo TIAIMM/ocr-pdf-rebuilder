@@ -14,10 +14,11 @@ remain local and must not be staged or committed.
 
 ## Repository snapshot
 
-The current repository renderer has a recorded SHA-256 in
-`provenance/production-baseline.json`. The original external runtime tree has
-been retired; the renderer and all ignored runtime directories now share this
-repository root.
+The complete `ocr_pdf_rebuilder` source package has a deterministic, per-file
+SHA-256 manifest in `provenance/production-baseline.json`. The original external
+runtime tree has been retired. Production code is atomically promoted to the
+ignored `.production/src/ocr_pdf_rebuilder` snapshot, while inputs, outputs,
+fonts, logs and checkpoints continue to live under this repository root.
 
 Repository organization must not be
 treated as proof of OCR accuracy; production promotion still requires tests,
@@ -105,11 +106,20 @@ git add -A
 ```
 
 This is read-only. It verifies commands, package versions, fonts, GPU visibility
-and the repository source hash.
+and byte identity between the recorded baseline, repository package and
+deployed production package.
 
 ## Deployment
 
-Deployment is dry-run by default:
+After the tests pass and the source change is reviewed, explicitly record the
+complete package baseline:
+
+```bash
+${OCR_PYTHON:-python3} ./scripts/update-production-baseline.py
+```
+
+Deployment is dry-run by default and refuses source that does not match that
+baseline:
 
 ```bash
 ./scripts/deploy-to-wsl.sh
@@ -121,9 +131,10 @@ Apply only after tests pass:
 ./scripts/deploy-to-wsl.sh --apply
 ```
 
-The script compiles the source, compares hashes, creates a timestamped backup
-when content changes, installs through an atomic rename, and verifies the final
-hash. It never copies runtime data into the repository.
+The script compiles every shipped Python file, stages the complete package,
+creates a timestamped backup when content changes, installs the package through
+an atomic directory rename, and verifies the final package manifest. It never
+copies runtime data into the production snapshot.
 
 Compare repository and production renderers on the same generated fixture:
 
@@ -139,7 +150,8 @@ pixels, including a trailing blank page. It does not invoke MinerU or read books
 From the repository root:
 
 ```bash
-PYTHONPATH=./src ${OCR_PYTHON:-python3} -m ocr_pdf_rebuilder.mineru_pipeline
+PYTHONPATH=./.production/src OCR_RUNTIME_ROOT="$PWD" \
+  ${OCR_PYTHON:-python3} -m ocr_pdf_rebuilder.mineru_pipeline
 ```
 
 Run the PaddleOCR-VL-first pipeline with the shared renderer environment; its

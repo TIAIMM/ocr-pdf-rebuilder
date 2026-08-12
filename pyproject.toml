@@ -3,7 +3,7 @@ requires = ["setuptools==80.10.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "document-ocr-pipeline"
+name = "ocr-pdf-rebuilder"
 version = "0.1.0"
 description = "Resumable, failure-isolated OCR and PDF reconstruction pipeline."
 readme = "README.md"
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-document-ocr-pipeline = "document_ocr_pipeline.mineru_textonly_pdf:main"
+ocr-pdf-rebuilder = "ocr_pdf_rebuilder.mineru_textonly_pdf:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

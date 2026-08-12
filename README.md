@@ -1,4 +1,4 @@
-# document-ocr-pipeline
+# ocr-pdf-rebuilder
 
 Resumable, failure-isolated OCR and PDF reconstruction for long multilingual
 documents. The production path uses MinerU layout/OCR results and rebuilds two
@@ -44,7 +44,7 @@ hashes are recorded under `provenance/`.
 Run the CPU regression suite inside the existing MinerU environment:
 
 ```bash
-cd /home/ocr/document-ocr-pipeline
+cd /home/ocr/ocr-pdf-rebuilder
 /home/ocr/miniconda3/envs/mineru/bin/python -m unittest discover -s tests -v
 ```
 

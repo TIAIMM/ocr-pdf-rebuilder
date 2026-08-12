@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
-source_path="$repo_root/src/document_ocr_pipeline/mineru_textonly_pdf.py"
+source_path="$repo_root/src/ocr_pdf_rebuilder/mineru_textonly_pdf.py"
 target_root="${OCR_RUNTIME_ROOT:-/home/ocr/ocr_jobs}"
 apply=0
 

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$Distribution = "Ubuntu-24.04-OCR",
-    [string]$Repository = "/home/ocr/document-ocr-pipeline",
+    [string]$Repository = "/home/ocr/ocr-pdf-rebuilder",
     [string]$Target = "/home/ocr/ocr_jobs",
     [switch]$Apply
 )

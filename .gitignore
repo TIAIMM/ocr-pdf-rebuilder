@@ -62,6 +62,7 @@ venv/
 build/
 dist/
 *.egg-info/
+*.whl
 
 # IDE and OS
 .vscode/

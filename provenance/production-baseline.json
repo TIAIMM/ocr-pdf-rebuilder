@@ -2,7 +2,7 @@
   "schema": 1,
   "captured_at": "2026-08-12",
   "source_path_at_capture": "/home/ocr/ocr_jobs/mineru_textonly_pdf.py",
-  "repository_path": "src/document_ocr_pipeline/mineru_textonly_pdf.py",
+  "repository_path": "src/ocr_pdf_rebuilder/mineru_textonly_pdf.py",
   "sha256": "23f2bc81ffa3233e742fa47eb060918b3f9310d78adecaf52656c78f07fdd715",
   "bytes": 267887,
   "lines": 7606,

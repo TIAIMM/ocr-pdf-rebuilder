@@ -3,7 +3,7 @@
 ## Preflight
 
 ```bash
-cd /home/ocr/document-ocr-pipeline
+cd /home/ocr/ocr-pdf-rebuilder
 ./scripts/verify-environment.sh
 /home/ocr/miniconda3/envs/mineru/bin/python -m unittest discover -s tests -v
 ./scripts/deploy-to-wsl.sh

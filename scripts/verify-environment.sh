@@ -49,7 +49,7 @@ for package, wanted in expected.items():
     else:
         print(f"PASS: package {package}=={actual}")
 
-source = pathlib.Path(sys.argv[1]) / "src/document_ocr_pipeline/mineru_textonly_pdf.py"
+source = pathlib.Path(sys.argv[1]) / "src/ocr_pdf_rebuilder/mineru_textonly_pdf.py"
 compile(source.read_text(encoding="utf-8"), str(source), "exec")
 print("PASS: repository production source compiles")
 raise SystemExit(1 if bad else 0)

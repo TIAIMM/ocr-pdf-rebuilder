@@ -18,6 +18,16 @@ Errors such as temporary service unavailability, connection reset, NCCL failure,
 the same task first. Recursive splitting is for persistent content/task failure,
 not the first infrastructure failure.
 
+## Paddle worker or vLLM failure
+
+Paddle uses separate owned POSIX process groups for the page worker and the
+local vLLM server. The page worker closes its Paddle pipeline in `finally`; the
+parent then terminates the vLLM group on success, file failure, timeout or
+interrupt. The GUI task itself is also a process-group leader and escalates
+cleanup if a graceful stop misses its deadline. A rerun reuses only checksummed
+page checkpoints matching the same source, configuration, model files and both
+Conda runtime identities.
+
 ## Checkpoints
 
 Checkpoint JSON carries `_checkpoint_sha256`. Missing, malformed or mismatched

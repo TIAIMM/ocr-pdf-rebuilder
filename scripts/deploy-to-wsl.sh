@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
-source_path="$repo_root/src/ocr_pdf_rebuilder/mineru_textonly_pdf.py"
+source_path="$repo_root/src/ocr_pdf_rebuilder/pipeline_runtime.py"
 target_root="${OCR_DEPLOY_ROOT:-$repo_root/src/ocr_pdf_rebuilder}"
 apply=0
 
@@ -33,7 +33,7 @@ case "$target_root/" in
     *) printf 'refusing target outside repository: %s\n' "$target_root" >&2; exit 2 ;;
 esac
 
-target_path="$target_root/mineru_textonly_pdf.py"
+target_path="$target_root/pipeline_runtime.py"
 python_bin="${OCR_PYTHON:-}"
 if [[ -z "$python_bin" ]]; then
     if [[ -x "$HOME/miniconda3/envs/mineru/bin/python" ]]; then
@@ -72,12 +72,12 @@ backup_root="$target_root/.deploy-backups"
 if [[ -f "$target_path" ]]; then
     mkdir -p -- "$backup_root"
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-    backup_path="$backup_root/mineru_textonly_pdf.py.$stamp.$target_hash"
+    backup_path="$backup_root/pipeline_runtime.py.$stamp.$target_hash"
     cp --preserve=mode,timestamps -- "$target_path" "$backup_path"
     printf 'backup : %s\n' "$backup_path"
 fi
 
-temp_path="$(mktemp "$target_root/.mineru_textonly_pdf.py.deploy.XXXXXX")"
+temp_path="$(mktemp "$target_root/.pipeline_runtime.py.deploy.XXXXXX")"
 cleanup() { rm -f -- "$temp_path"; }
 trap cleanup EXIT
 install -m 0644 -- "$source_path" "$temp_path"

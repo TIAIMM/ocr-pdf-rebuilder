@@ -25,9 +25,10 @@ environment verification and a same-input artifact comparison.
 
 ## Pipeline modules
 
-`ocr_pdf_rebuilder.mineru_textonly_pdf` remains the stable CLI entry point and
-now only wires dependencies, retains compatibility helpers and launches the
-batch. Focused components have no dependency back to the CLI entry point:
+`ocr_pdf_rebuilder.pipeline_runtime` wires shared reconstruction dependencies
+and retains compatibility helpers. `mineru_pipeline` and
+`paddle_textonly_pdf` are thin engine-specific CLI entry points. Focused
+components have no dependency back to either CLI entry point:
 
 - `pipeline_config.py`: runtime paths, production settings and shared patterns;
 - `runtime_state.py`: source/runtime fingerprints, checkpoints and completed
@@ -48,6 +49,10 @@ batch. Focused components have no dependency back to the CLI entry point:
 - `qc_reporting.py`: suspect-page analysis, debug artifacts and QC reports;
 - `pipeline_orchestrator.py`: one-document production flow and workspace
   lifecycle;
+- `paddle_worker.py`: dedicated-environment PaddleOCR-VL model process and
+  normalized per-page JSON checkpoints;
+- `paddle_pipeline.py`: Paddle runtime identity, retries, recovery and output
+  orchestration on top of the shared renderer;
 - `batch_runner.py`: multi-file iteration, failure isolation and atomic batch
   summary updates;
 - `forward_page_leak.py`: source-page overlap detection and isolated-retry
@@ -134,8 +139,26 @@ pixels, including a trailing blank page. It does not invoke MinerU or read books
 From the repository root:
 
 ```bash
-PYTHONPATH=./src ${OCR_PYTHON:-python3} -m ocr_pdf_rebuilder.mineru_textonly_pdf
+PYTHONPATH=./src ${OCR_PYTHON:-python3} -m ocr_pdf_rebuilder.mineru_pipeline
 ```
+
+Run the PaddleOCR-VL-first pipeline with the shared renderer environment; its
+worker automatically uses `~/miniconda3/envs/paddleocr/bin/python`:
+
+```bash
+./scripts/run-paddle.sh
+```
+
+Both engines read `input/`. MinerU writes to `pdf_mineru/`, `mineru_output/`
+and `logs_mineru/`; Paddle writes independently to `pdf_paddle/`,
+`paddle_output/` and `logs_paddle/`. Paddle uses PP-DocLayoutV3 plus
+PaddleOCR-VL-1.6. On the current NVIDIA Blackwell host, recognition defaults to
+a local vLLM OpenAI-compatible server from the `mineru` environment; the
+`paddleocr` environment owns layout detection and the page worker. Set
+`PADDLEOCR_VL_BACKEND=native` only for an explicitly tested native-inference
+host. The pipeline checkpoints every page, retries suspicious pages against the
+same server session, and then uses the same cross-page checks,
+ReportLab renderer, text-only/image-variant contract and PDF validators.
 
 Operational details and recovery rules are in `docs/production-runbook.md` and
 `docs/failure-recovery.md`.
@@ -151,9 +174,9 @@ From the repository root:
 ```
 
 Open `http://localhost:18765/` if the browser does not open automatically. The
-GUI lists PDFs from `input/`, starts the repository
-batch, streams its console output, requests the existing safe process-group
-cleanup when stopped, displays `batch_summary.json`, and offers generated PDFs
+GUI lists PDFs from `input/`, lets the operator select MinerU or PaddleOCR-VL,
+starts the selected repository batch, streams its console output, requests safe
+process-group cleanup when stopped, displays `batch_summary.json`, and offers generated PDFs
 for download. Per-file progress shows the active stage, weighted total percent,
 and current/total page count. It binds to localhost by default and has no upload
 or delete operation.

@@ -19,6 +19,9 @@ class PdfBatchRunner:
         process_pdf: Callable[[Path, int, int], dict[str, object] | None],
         write_checkpoint: Callable[[Path, dict[str, object]], None],
         logger: Callable[[str], None],
+        engine_name: str = "MinerU",
+        raw_label: str = "Raw",
+        log_suffix: str = "mineru",
     ) -> None:
         self.input_dir = input_dir
         self.output_dir = output_dir
@@ -27,6 +30,9 @@ class PdfBatchRunner:
         self.process_pdf = process_pdf
         self.write_checkpoint = write_checkpoint
         self.logger = logger
+        self.engine_name = engine_name
+        self.raw_label = raw_label
+        self.log_suffix = log_suffix
 
     def write_summary(
         self,
@@ -63,10 +69,10 @@ class PdfBatchRunner:
             self.logger(f"No PDF files found in: {self.input_dir}")
             return
 
-        self.logger("MinerU text-only PDF production")
+        self.logger(f"{self.engine_name} text-only PDF production")
         self.logger(f"Input:  {self.input_dir}")
         self.logger(f"Output: {self.output_dir}")
-        self.logger(f"Raw:    {self.mineru_output_dir}")
+        self.logger(f"{self.raw_label}:    {self.mineru_output_dir}")
         self.logger(f"PDFs:   {len(pdfs)}")
 
         started_at = time.time()
@@ -91,7 +97,9 @@ class PdfBatchRunner:
                     "input_pdf": str(pdf_path),
                     "error": error_text,
                     "traceback": traceback_text,
-                    "log_path": str(self.log_dir / f"{pdf_path.stem}_mineru.log"),
+                    "log_path": str(
+                        self.log_dir / f"{pdf_path.stem}_{self.log_suffix}.log"
+                    ),
                     "elapsed_seconds": round(time.monotonic() - file_start, 3),
                 }
             results.append(result)

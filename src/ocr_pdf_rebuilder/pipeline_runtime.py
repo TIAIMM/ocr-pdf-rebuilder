@@ -15,7 +15,6 @@ if __package__:
     from . import reportlab_renderer as _reportlab_renderer
     from . import runtime_state as _runtime_state
     from . import text_processing as _text_processing
-    from .batch_runner import PdfBatchRunner
     from .component_runtime import install_component
     from .forward_page_leak import ForwardPageLeakAnalyzer, ForwardPageLeakConfig
     from .pdf_validation import PdfArtifactValidator
@@ -38,7 +37,6 @@ else:  # Support direct file loading used by diagnostics and the test harness.
     import ocr_pdf_rebuilder.reportlab_renderer as _reportlab_renderer
     import ocr_pdf_rebuilder.runtime_state as _runtime_state
     import ocr_pdf_rebuilder.text_processing as _text_processing
-    from ocr_pdf_rebuilder.batch_runner import PdfBatchRunner
     from ocr_pdf_rebuilder.component_runtime import install_component
     from ocr_pdf_rebuilder.forward_page_leak import (
         ForwardPageLeakAnalyzer,
@@ -158,11 +156,12 @@ def formula_render_dependencies():
     return FORMULA_RENDER_DEPS
 
 
-def live_process_controller():
+def live_process_controller(process_label="MinerU"):
     return LiveProcessController(
         logger=log,
         console_lock=LOG_LOCK,
         exit_cleanup_seconds=MINERU_PROCESS_EXIT_CLEANUP_SECONDS,
+        process_label=process_label,
     )
 
 
@@ -197,8 +196,9 @@ def run_live_process(
     timeout_seconds=MINERU_PROCESS_TIMEOUT_SECONDS,
     idle_timeout_seconds=MINERU_PROCESS_IDLE_TIMEOUT_SECONDS,
     termination_grace_seconds=MINERU_PROCESS_TERMINATE_GRACE_SECONDS,
+    process_label="MinerU",
 ):
-    return live_process_controller().run(
+    return live_process_controller(process_label=process_label).run(
         cmd,
         cwd,
         log_path,
@@ -362,31 +362,3 @@ def warn_pdf_suspected_markdown(pdf_path, validation_scan=None):
 install_component(_qc_reporting, globals())
 
 install_component(_pipeline_orchestrator, globals())
-
-def pdf_batch_runner():
-    return PdfBatchRunner(
-        input_dir=INPUT_DIR,
-        output_dir=OUTPUT_DIR,
-        mineru_output_dir=MINERU_OUTPUT_DIR,
-        log_dir=LOG_DIR,
-        process_pdf=process_pdf,
-        write_checkpoint=write_checkpoint,
-        logger=log,
-    )
-
-
-def write_batch_summary(started_at, pdfs, results, status, finished_at=None):
-    return pdf_batch_runner().write_summary(
-        started_at,
-        pdfs,
-        results,
-        status,
-        finished_at=finished_at,
-    )
-
-
-def main():
-    pdf_batch_runner().run()
-
-if __name__ == "__main__":
-    main()

@@ -56,9 +56,10 @@ for package, wanted in expected.items():
     else:
         print(f"PASS: package {package}=={actual}")
 
-source = pathlib.Path(sys.argv[1]) / "src/ocr_pdf_rebuilder/mineru_textonly_pdf.py"
-compile(source.read_text(encoding="utf-8"), str(source), "exec")
-print("PASS: repository production source compiles")
+package = pathlib.Path(sys.argv[1]) / "src/ocr_pdf_rebuilder"
+for source in package.glob("*.py"):
+    compile(source.read_text(encoding="utf-8"), str(source), "exec")
+print("PASS: repository production modules compile")
 raise SystemExit(1 if bad else 0)
 PY
 fi

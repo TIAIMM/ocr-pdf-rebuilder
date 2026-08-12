@@ -23,10 +23,12 @@ class LiveProcessController:
         logger: Callable[[str], None],
         console_lock: threading.Lock,
         exit_cleanup_seconds: float,
+        process_label: str = "MinerU",
     ) -> None:
         self.logger = logger
         self.console_lock = console_lock
         self.exit_cleanup_seconds = exit_cleanup_seconds
+        self.process_label = process_label
 
     @staticmethod
     def posix_process_group_exists(process_group_id: int | None) -> bool:
@@ -71,7 +73,7 @@ class LiveProcessController:
                     pass
                 return
             self.logger(
-                f"    Terminating MinerU process group pgid={process_group_id}: {reason}"
+                f"    Terminating {self.process_label} process group pgid={process_group_id}: {reason}"
             )
             try:
                 os.killpg(process_group_id, signal.SIGTERM)
@@ -88,7 +90,7 @@ class LiveProcessController:
                     pass
                 return
             self.logger(
-                f"    MinerU process group pgid={process_group_id} did not exit within "
+                f"    {self.process_label} process group pgid={process_group_id} did not exit within "
                 f"{grace_seconds:.1f}s; sending SIGKILL"
             )
             try:
@@ -108,7 +110,7 @@ class LiveProcessController:
 
         if process.poll() is not None:
             return
-        self.logger(f"    Terminating MinerU process pid={process.pid}: {reason}")
+        self.logger(f"    Terminating {self.process_label} process pid={process.pid}: {reason}")
         try:
             process.terminate()
             process.wait(timeout=grace_seconds)
@@ -217,7 +219,7 @@ class LiveProcessController:
                     if process.poll() is None:
                         if timeout_seconds is not None and now - started_at >= timeout_seconds:
                             message = (
-                                f"MinerU process exceeded total timeout of {timeout_seconds:.1f}s"
+                                f"{self.process_label} process exceeded total timeout of {timeout_seconds:.1f}s"
                             )
                             append_output(f"\n[controller] {message}\n")
                             flush_pending(force=True)
@@ -233,7 +235,7 @@ class LiveProcessController:
                             and now - last_activity >= idle_timeout_seconds
                         ):
                             message = (
-                                "MinerU process produced no stdout/stderr for "
+                                f"{self.process_label} process produced no stdout/stderr for "
                                 f"{idle_timeout_seconds:.1f}s"
                             )
                             append_output(f"\n[controller] {message}\n")
@@ -270,7 +272,7 @@ class LiveProcessController:
                     self.terminate_process_group(
                         process,
                         process_group_id,
-                        "MinerU parent exited but child processes remained",
+                        f"{self.process_label} parent exited but child processes remained",
                         termination_grace_seconds,
                     )
                 return returncode

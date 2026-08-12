@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
-repository_source="${1:-$repo_root/src/ocr_pdf_rebuilder/mineru_textonly_pdf.py}"
+repository_source="${1:-$repo_root/src/ocr_pdf_rebuilder/pipeline_runtime.py}"
 production_source="${2:-$repository_source}"
 manifest="$repo_root/provenance/production-baseline.json"
 

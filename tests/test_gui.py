@@ -62,6 +62,16 @@ class GuiControllerTests(unittest.TestCase):
         first_path = Path(env["PATH"].split(os.pathsep, 1)[0])
         self.assertEqual(first_path, Path(sys.executable).resolve().parent)
 
+    def test_default_command_selects_engine_specific_entry(self):
+        self.assertEqual(
+            GuiController._default_command("mineru")[-1],
+            "ocr_pdf_rebuilder.mineru_pipeline",
+        )
+        self.assertEqual(
+            GuiController._default_command("paddle")[-1],
+            "ocr_pdf_rebuilder.paddle_textonly_pdf",
+        )
+
     def test_run_captures_utf8_log_and_exit_state(self):
         (self.input_dir / "sample.pdf").write_bytes(b"fixture")
         command = [sys.executable, "-u", "-c", "print('生成完成')"]
@@ -136,6 +146,22 @@ class GuiControllerTests(unittest.TestCase):
         self.assertEqual(layout_progress["page_current"], 100)
         self.assertEqual(layout_progress["percent"], 80.0)
 
+    def test_tracks_paddleocr_page_progress(self):
+        (self.input_dir / "sample.pdf").write_bytes(b"fixture")
+        controller = self.controller([sys.executable, "-c", "pass"])
+        with controller._lock:
+            controller._reset_file_progress(controller.list_inputs())
+            controller._consume_progress_text(
+                "[1/1] Start: sample.pdf\n"
+                "    Pages:  10\n"
+                "    [1/5] Running PaddleOCR-VL parser\n"
+                "PaddleOCR page 4/10: blocks=12\n"
+            )
+        progress = controller.status()["file_progress"][0]
+        self.assertEqual(progress["stage"], "PaddleOCR-VL 逐页识别")
+        self.assertEqual(progress["page_current"], 4)
+        self.assertEqual(progress["percent"], 26.0)
+
     def test_lists_outputs_and_reads_summary(self):
         output = self.output_dir / "结果 文件.pdf"
         output.write_bytes(b"pdf")
@@ -166,6 +192,37 @@ class GuiControllerTests(unittest.TestCase):
 
         self.assertEqual(controller.status()["status"], "failed")
         self.assertIn("正在请求安全停止", controller.log_since(0)["text"])
+
+    @unittest.skipUnless(os.name == "posix", "descendant cleanup uses POSIX groups")
+    def test_stop_reclaims_gui_task_descendants(self):
+        (self.input_dir / "sample.pdf").write_bytes(b"fixture")
+        child_pid_file = self.root / "child.pid"
+        child_code = "import time;time.sleep(60)"
+        script = (
+            "import pathlib,subprocess,sys,time;"
+            f"child=subprocess.Popen([sys.executable,'-c',{child_code!r}]);"
+            f"pathlib.Path({str(child_pid_file)!r}).write_text(str(child.pid));"
+            "print('ready',flush=True);time.sleep(60)"
+        )
+        controller = self.controller([sys.executable, "-u", "-c", script])
+        controller.start()
+        deadline = time.monotonic() + 5
+        while not child_pid_file.is_file() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertTrue(child_pid_file.is_file())
+        child_pid = int(child_pid_file.read_text())
+
+        controller.stop()
+        self.wait_until_finished(controller)
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail(f"GUI descendant process {child_pid} survived cleanup")
 
     def test_http_status_and_csrf_protection(self):
         controller = self.controller([sys.executable, "-c", "pass"])

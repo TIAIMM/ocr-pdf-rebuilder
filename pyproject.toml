@@ -17,7 +17,8 @@ dependencies = [
 ]
 
 [project.scripts]
-ocr-pdf-rebuilder = "ocr_pdf_rebuilder.mineru_textonly_pdf:main"
+ocr-pdf-rebuilder = "ocr_pdf_rebuilder.mineru_pipeline:main"
+ocr-pdf-rebuilder-paddle = "ocr_pdf_rebuilder.paddle_textonly_pdf:main"
 ocr-pdf-rebuilder-gui = "ocr_pdf_rebuilder.gui:main"
 
 [tool.setuptools.packages.find]

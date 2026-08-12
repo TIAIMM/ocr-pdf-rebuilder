@@ -10,6 +10,7 @@ import unittest
 from unittest import mock
 
 from support import load_pipeline
+from ocr_pdf_rebuilder.batch_runner import PdfBatchRunner
 
 
 class BatchAndProcessStabilityTests(unittest.TestCase):
@@ -36,19 +37,24 @@ class BatchAndProcessStabilityTests(unittest.TestCase):
                 raise RuntimeError("bad input")
             return {"status": "completed"}
 
-        self.pipeline.INPUT_DIR = input_dir
-        self.pipeline.LOG_DIR = self.root / "logs"
-        self.pipeline.OUTPUT_DIR = self.root / "output"
+        log_dir = self.root / "logs"
+        runner = PdfBatchRunner(
+            input_dir=input_dir,
+            output_dir=self.root / "output",
+            mineru_output_dir=self.root / "raw",
+            log_dir=log_dir,
+            process_pdf=fake_process,
+            write_checkpoint=self.pipeline.write_checkpoint,
+            logger=lambda _message: None,
+        )
         with (
-            mock.patch.object(self.pipeline, "process_pdf", side_effect=fake_process),
-            mock.patch.object(self.pipeline, "log"),
             self.assertRaises(SystemExit) as exit_context,
         ):
-            self.pipeline.main()
+            runner.run()
 
         self.assertEqual(exit_context.exception.code, 1)
         self.assertEqual(calls, ["a.pdf", "b.pdf", "c.pdf"])
-        summary = self.pipeline.read_checkpoint(self.pipeline.LOG_DIR / "batch_summary.json")
+        summary = self.pipeline.read_checkpoint(log_dir / "batch_summary.json")
         self.assertEqual(summary["status"], "completed_with_failures")
         self.assertEqual(summary["counts"], {"completed": 2, "skipped": 0, "failed": 1})
 
@@ -88,6 +94,41 @@ class BatchAndProcessStabilityTests(unittest.TestCase):
             time.sleep(0.1)
         else:
             self.fail(f"descendant process {child_pid} survived process-group cleanup")
+
+    @unittest.skipUnless(os.name == "posix", "process-group semantics require POSIX")
+    def test_normal_parent_exit_reclaims_lingering_descendant(self):
+        child_pid_file = self.root / "normal-exit-child.pid"
+        child_code = (
+            "import os,time,pathlib;"
+            f"pathlib.Path({str(child_pid_file)!r}).write_text(str(os.getpid()));"
+            "time.sleep(60)"
+        )
+        parent_code = (
+            "import subprocess,sys;"
+            f"subprocess.Popen([sys.executable,'-c',{child_code!r}]);"
+            "print('parent exiting',flush=True)"
+        )
+        returncode = self.pipeline.run_live_process(
+            [sys.executable, "-c", parent_code],
+            self.root,
+            self.root / "normal-exit.log",
+            stream_to_console=False,
+            timeout_seconds=5,
+            idle_timeout_seconds=None,
+            termination_grace_seconds=0.2,
+            process_label="test OCR worker",
+        )
+        self.assertEqual(returncode, 0)
+        child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            self.fail(f"descendant process {child_pid} survived normal parent exit")
 
     def test_transient_exhaustion_does_not_create_split_checkpoint(self):
         source = self.root / "source.pdf"

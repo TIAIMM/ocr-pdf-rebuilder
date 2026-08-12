@@ -57,8 +57,13 @@ class PipelineModuleBoundaryTests(unittest.TestCase):
                     imported_modules.extend(alias.name for alias in node.names)
                 elif isinstance(node, ast.ImportFrom) and node.module:
                     imported_modules.append(node.module)
+            forbidden_entries = ("mineru_pipeline", "paddle_textonly_pdf")
             self.assertFalse(
-                any("mineru_textonly_pdf" in module for module in imported_modules),
+                any(
+                    entry in module
+                    for module in imported_modules
+                    for entry in forbidden_entries
+                ),
                 name,
             )
 
@@ -138,6 +143,13 @@ class PipelineModuleBoundaryTests(unittest.TestCase):
             exit_cleanup_seconds=0.1,
         )
         self.assertFalse(controller.posix_process_group_exists(None))
+
+    def test_extracted_runtime_modules_own_required_module_dependencies(self):
+        self.assertEqual(mineru_runner.math.ceil(61 / 60), 2)
+        self.assertIs(mineru_runner.sys, __import__("sys"))
+        self.assertTrue(callable(runtime_state.time.time))
+        self.assertTrue(callable(runtime_state.threading.get_ident))
+        self.assertTrue(callable(runtime_state.fitz.open))
 
 
 if __name__ == "__main__":

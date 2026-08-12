@@ -17,9 +17,12 @@ import subprocess
 import sys
 import threading
 import time
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import ProxyHandler, build_opener
 import webbrowser
+
+from .process_control import LiveProcessController
+from .signal_cleanup import termination_raises_keyboard_interrupt
 
 
 DEFAULT_RUNTIME_ROOT = Path(
@@ -28,7 +31,22 @@ DEFAULT_RUNTIME_ROOT = Path(
 DEFAULT_INPUT_DIR = DEFAULT_RUNTIME_ROOT / "input"
 DEFAULT_OUTPUT_DIR = DEFAULT_RUNTIME_ROOT / "pdf_mineru"
 DEFAULT_SUMMARY_PATH = DEFAULT_RUNTIME_ROOT / "logs_mineru/batch_summary.json"
+PIPELINES = {
+    "mineru": {
+        "module": "ocr_pdf_rebuilder.mineru_pipeline",
+        "output_dir": DEFAULT_RUNTIME_ROOT / "pdf_mineru",
+        "summary_path": DEFAULT_RUNTIME_ROOT / "logs_mineru/batch_summary.json",
+        "label": "MinerU",
+    },
+    "paddle": {
+        "module": "ocr_pdf_rebuilder.paddle_textonly_pdf",
+        "output_dir": DEFAULT_RUNTIME_ROOT / "pdf_paddle",
+        "summary_path": DEFAULT_RUNTIME_ROOT / "logs_paddle/batch_summary.json",
+        "label": "PaddleOCR-VL",
+    },
+}
 MAX_LOG_CHARS = 400_000
+GUI_TASK_TERMINATE_GRACE_SECONDS = 45.0
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
@@ -56,9 +74,15 @@ class GuiController:
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.summary_path = Path(summary_path)
-        self.command_factory = command_factory or self._default_command
+        self.command_factory = command_factory
+        self._dynamic_pipeline_paths = (
+            self.output_dir == DEFAULT_OUTPUT_DIR
+            and self.summary_path == DEFAULT_SUMMARY_PATH
+        )
+        self._pipeline = "mineru"
         self._lock = threading.RLock()
         self._process: subprocess.Popen[bytes] | None = None
+        self._process_group_id: int | None = None
         self._status = "idle"
         self._returncode: int | None = None
         self._started_at: float | None = None
@@ -73,8 +97,22 @@ class GuiController:
         self._active_parser_page_start = 1
 
     @staticmethod
-    def _default_command() -> list[str]:
-        return [sys.executable, "-u", "-m", "ocr_pdf_rebuilder.mineru_textonly_pdf"]
+    def _default_command(pipeline: str = "mineru") -> list[str]:
+        module = str(PIPELINES[pipeline]["module"])
+        return [sys.executable, "-u", "-m", module]
+
+    def _command(self, pipeline: str) -> list[str]:
+        if self.command_factory is not None:
+            return self.command_factory()
+        return self._default_command(pipeline)
+
+    def _select_pipeline(self, pipeline: str) -> None:
+        if pipeline not in PIPELINES:
+            raise RuntimeError(f"未知 OCR 管线：{pipeline}")
+        self._pipeline = pipeline
+        if self._dynamic_pipeline_paths:
+            self.output_dir = Path(PIPELINES[pipeline]["output_dir"])
+            self.summary_path = Path(PIPELINES[pipeline]["summary_path"])
 
     @staticmethod
     def _source_environment() -> dict[str, str]:
@@ -221,6 +259,23 @@ class GuiController:
             self._set_progress(record, stage="MinerU 解析", percent=0.1)
             return
 
+        if "[1/5] Running PaddleOCR-VL parser" in line:
+            self._set_progress(record, stage="PaddleOCR-VL 逐页识别", percent=0.1)
+            return
+
+        match = re.search(r"PaddleOCR page (\d+)/(\d+):", line)
+        if match:
+            current = int(match.group(1))
+            total = int(match.group(2))
+            self._set_progress(
+                record,
+                stage="PaddleOCR-VL 逐页识别",
+                percent=65.0 * current / total,
+                page_current=current,
+                page_total=total,
+            )
+            return
+
         match = re.search(r"MinerU task .*original pages (\d+)-(\d+)", line)
         if match:
             self._active_parser_page_start = int(match.group(1))
@@ -248,6 +303,16 @@ class GuiController:
             self._set_progress(
                 record,
                 stage="加载与修复识别结果",
+                percent=65.0,
+                page_current=total if isinstance(total, int) else None,
+            )
+            return
+
+        if "[2/5] Loading and validating PaddleOCR page results" in line:
+            total = record.get("page_total")
+            self._set_progress(
+                record,
+                stage="加载与修复 PaddleOCR 结果",
                 percent=65.0,
                 page_current=total if isinstance(total, int) else None,
             )
@@ -319,10 +384,11 @@ class GuiController:
         payload.pop("_checkpoint_sha256", None)
         return payload
 
-    def start(self) -> None:
+    def start(self, pipeline: str = "mineru") -> None:
         with self._lock:
             if self._process is not None and self._process.poll() is None:
                 raise RuntimeError("生成任务已经在运行")
+            self._select_pipeline(pipeline)
             inputs = self.list_inputs()
             if not inputs:
                 raise RuntimeError(f"输入目录中没有 PDF：{self.input_dir}")
@@ -341,7 +407,7 @@ class GuiController:
             if os.name == "nt":
                 creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
             process = subprocess.Popen(
-                self.command_factory(),
+                self._command(pipeline),
                 cwd=str(Path(__file__).resolve().parents[2]),
                 env=self._source_environment(),
                 stdin=subprocess.DEVNULL,
@@ -349,8 +415,10 @@ class GuiController:
                 stderr=subprocess.STDOUT,
                 bufsize=0,
                 creationflags=creationflags,
+                start_new_session=(os.name == "posix"),
             )
             self._process = process
+            self._process_group_id = os.getpgid(process.pid) if os.name == "posix" else None
             self._status = "running"
             self._append_log(
                 f"[GUI] 已启动生成任务，PID={process.pid}，输入 PDF={len(inputs)}\n"
@@ -375,8 +443,11 @@ class GuiController:
             returncode = process.poll()
             if returncode is None:
                 returncode = -1
+            self._reclaim_process(process, "GUI output monitor failed")
         finally:
             process.stdout.close()
+
+        self._reclaim_process(process, "GUI task parent finished")
 
         with self._lock:
             if self._process is process:
@@ -384,6 +455,7 @@ class GuiController:
                 self._finished_at = time.time()
                 self._status = "completed" if returncode == 0 else "failed"
                 self._process = None
+                self._process_group_id = None
                 record = self._progress_record()
                 if record is not None and record.get("status") == "running":
                     if returncode == 0:
@@ -409,14 +481,44 @@ class GuiController:
                 return
             self._status = "stopping"
             self._append_log(
-                "\n[GUI] 正在请求安全停止；MinerU 子进程清理最多可能需要约 20 秒……\n"
+                "\n[GUI] 正在请求安全停止；OCR 子进程清理最多可能需要约 20 秒……\n"
             )
             if os.name == "posix":
-                process.send_signal(signal.SIGINT)
+                try:
+                    os.killpg(self._process_group_id or process.pid, signal.SIGINT)
+                except ProcessLookupError:
+                    pass
             elif hasattr(signal, "CTRL_BREAK_EVENT"):
                 process.send_signal(signal.CTRL_BREAK_EVENT)
             else:
                 process.terminate()
+
+    def _reclaim_process(self, process: subprocess.Popen[bytes], reason: str) -> None:
+        with self._lock:
+            process_group_id = (
+                self._process_group_id if self._process is process else None
+            )
+        controller = LiveProcessController(
+            logger=lambda message: self._append_log(message + "\n"),
+            console_lock=self._lock,
+            exit_cleanup_seconds=1.0,
+            process_label="GUI OCR task",
+        )
+        if process.poll() is None or controller.posix_process_group_exists(process_group_id):
+            controller.terminate_process_group(
+                process,
+                process_group_id,
+                reason,
+                grace_seconds=GUI_TASK_TERMINATE_GRACE_SECONDS,
+            )
+
+    def force_stop(self) -> None:
+        """Escalate shutdown and reclaim the complete GUI task process group."""
+
+        with self._lock:
+            process = self._process
+        if process is not None:
+            self._reclaim_process(process, "GUI shutdown deadline reached")
 
     def status(self) -> dict[str, object]:
         with self._lock:
@@ -429,6 +531,12 @@ class GuiController:
                 "started_at": self._started_at,
                 "finished_at": self._finished_at,
                 "run_id": self._run_id,
+                "pipeline": self._pipeline,
+                "pipeline_label": PIPELINES[self._pipeline]["label"],
+                "pipelines": [
+                    {"id": key, "label": value["label"]}
+                    for key, value in PIPELINES.items()
+                ],
                 "input_dir": str(self.input_dir),
                 "output_dir": str(self.output_dir),
                 "inputs": self.list_inputs(),
@@ -489,6 +597,7 @@ HTML_PAGE = r"""<!doctype html>
     .card h2 { margin:0 0 12px; font-size:16px; }
     .actions { display:flex; gap:10px; flex-wrap:wrap; margin:15px 0 8px; }
     button { border:0; border-radius:8px; padding:10px 17px; font:inherit; font-weight:650; cursor:pointer; background:var(--brand); color:white; }
+    select { width:100%; margin-top:7px; border:1px solid var(--line); border-radius:8px; padding:9px 10px; background:white; color:var(--ink); font:inherit; }
     button.secondary { background:white; color:var(--danger); border:1px solid #e1baba; }
     button:disabled { opacity:.45; cursor:not-allowed; }
     ul { list-style:none; padding:0; margin:0; max-height:240px; overflow:auto; }
@@ -517,11 +626,13 @@ HTML_PAGE = r"""<!doctype html>
 </head>
 <body>
 <main>
-  <header><div><h1>OCR PDF 生成器</h1><div class="subtitle">MinerU 纯文本 PDF 批处理控制面板</div></div><div id="status" class="status">读取中</div></header>
+  <header><div><h1>OCR PDF 生成器</h1><div class="subtitle">MinerU / PaddleOCR-VL 纯文本 PDF 批处理控制面板</div></div><div id="status" class="status">读取中</div></header>
   <section class="grid">
     <div class="card">
       <h2>控制</h2>
       <div id="inputPath" class="path"></div>
+      <label class="path" for="pipeline">主识别管线</label>
+      <select id="pipeline"><option value="mineru">MinerU</option><option value="paddle">PaddleOCR-VL</option></select>
       <div class="actions"><button id="start">开始生成</button><button id="stop" class="secondary">安全停止</button></div>
       <div class="hint">每次处理输入目录中的全部 PDF；已完成且完整性匹配的文件会复用检查点。</div>
       <div id="message" class="message"></div>
@@ -583,13 +694,13 @@ function renderFileProgress(files) {
 }
 async function refresh() {
   try { const r=await fetch('/api/status',{cache:'no-store'}); const s=await r.json();
-    $('status').textContent=labels[s.status]||s.status; $('status').className='status '+s.status; $('start').disabled=s.running||!s.inputs.length; $('stop').disabled=!s.running||s.status==='stopping'; $('inputPath').textContent='输入：'+s.input_dir; renderFiles('inputs',s.inputs); renderFiles('outputs',s.outputs,true); renderSummary(s.summary); renderFileProgress(s.file_progress||[]);
+    $('status').textContent=labels[s.status]||s.status; $('status').className='status '+s.status; $('start').disabled=s.running||!s.inputs.length; $('stop').disabled=!s.running||s.status==='stopping'; $('pipeline').disabled=s.running; if(s.pipeline&&(s.running||runId===null))$('pipeline').value=s.pipeline; $('inputPath').textContent='输入：'+s.input_dir; renderFiles('inputs',s.inputs); renderFiles('outputs',s.outputs,true); renderSummary(s.summary); renderFileProgress(s.file_progress||[]);
     if(runId!==s.run_id){runId=s.run_id;logOffset=0;$('log').textContent='';}
     const lr=await fetch('/api/log?offset='+logOffset,{cache:'no-store'}); const l=await lr.json(); if(l.reset)$('log').textContent=''; if(l.text){$('log').textContent+=l.text;$('log').scrollTop=$('log').scrollHeight;} logOffset=l.next_offset;
   } catch(e) { $('message').textContent='无法连接 GUI 服务：'+e; }
 }
 async function action(path) { $('message').textContent=''; try { const r=await fetch(path,{method:'POST',headers:{'X-CSRF-Token':csrf}}); const data=await r.json(); if(!r.ok) throw new Error(data.error||r.statusText); await refresh(); } catch(e){$('message').textContent=e.message;} }
-$('start').onclick=()=>action('/api/start'); $('stop').onclick=()=>action('/api/stop');
+$('start').onclick=()=>action('/api/start?pipeline='+encodeURIComponent($('pipeline').value)); $('stop').onclick=()=>action('/api/stop');
 refresh(); setInterval(refresh,1500);
 </script>
 </body></html>
@@ -655,9 +766,11 @@ def make_handler(controller: GuiController, csrf_token: str):
                 self._json(HTTPStatus.FORBIDDEN, {"error": "请求令牌无效"})
                 return
             try:
-                if self.path == "/api/start":
-                    controller.start()
-                elif self.path == "/api/stop":
+                parsed = urlparse(self.path)
+                if parsed.path == "/api/start":
+                    pipeline = parse_qs(parsed.query).get("pipeline", ["mineru"])[0]
+                    controller.start(pipeline)
+                elif parsed.path == "/api/stop":
                     controller.stop()
                 else:
                     self._json(HTTPStatus.NOT_FOUND, {"error": "未找到"})
@@ -686,7 +799,7 @@ def existing_gui_is_responding(url: str) -> bool:
     return (
         isinstance(payload, dict)
         and payload.get("input_dir") == str(DEFAULT_INPUT_DIR)
-        and payload.get("output_dir") == str(DEFAULT_OUTPUT_DIR)
+        and payload.get("pipeline") in PIPELINES
     )
 
 
@@ -698,7 +811,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> None:
+def _serve_gui(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     controller = GuiController()
     csrf_token = secrets.token_urlsafe(24)
@@ -736,7 +849,19 @@ def main(argv: list[str] | None = None) -> None:
             deadline = time.monotonic() + 30
             while controller.status()["running"] and time.monotonic() < deadline:
                 time.sleep(0.1)
+            if controller.status()["running"]:
+                controller.force_stop()
         server.server_close()
+
+
+def main(argv: list[str] | None = None) -> None:
+    try:
+        with termination_raises_keyboard_interrupt():
+            _serve_gui(argv)
+    except KeyboardInterrupt:
+        # Covers termination arriving before the HTTP server enters its own
+        # serve_forever try/finally block.
+        print("\nGUI 已关闭。", flush=True)
 
 
 if __name__ == "__main__":

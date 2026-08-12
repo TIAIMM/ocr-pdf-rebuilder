@@ -9,6 +9,10 @@ import os
 import platform
 import shutil
 import sys
+import threading
+import time
+
+import fitz
 
 from .component_runtime import ComponentRuntime
 from .pipeline_config import *
@@ -495,4 +499,3 @@ def component_exports():
 
 def invoke_component(name, namespace, *args, **kwargs):
     return _COMPONENT_RUNTIME.invoke(name, namespace, *args, **kwargs)
-

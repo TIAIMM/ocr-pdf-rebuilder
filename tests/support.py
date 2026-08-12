@@ -8,7 +8,9 @@ import sys
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = REPOSITORY_ROOT / "src"
-SOURCE_PATH = SOURCE_ROOT / "ocr_pdf_rebuilder/mineru_textonly_pdf.py"
+SOURCE_PATH = SOURCE_ROOT / "ocr_pdf_rebuilder/pipeline_runtime.py"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 
 def load_pipeline(home: Path):

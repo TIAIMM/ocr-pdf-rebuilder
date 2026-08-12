@@ -1,13 +1,13 @@
 {
   "schema": 2,
-  "captured_at": "2026-08-12T13:51:33.942896+00:00",
+  "captured_at": "2026-08-12T14:00:37.763522+00:00",
   "repository_path": "src/ocr_pdf_rebuilder",
   "package_identity": {
     "schema": 1,
     "algorithm": "sha256-canonical-file-manifest-v1",
     "package": "ocr_pdf_rebuilder",
-    "file_count": 24,
-    "files_sha256": "ea714953bbd56cdde3f1c3e9b0dcb315d00647f29432a7b6cb4b751f41b27cd1",
+    "file_count": 25,
+    "files_sha256": "25be57fd8ce4957f4c31683b61c2e9c226e4dafb7f4de93b1325caa3e249a2d2",
     "files": [
       {
         "path": "__init__.py",
@@ -16,8 +16,8 @@
       },
       {
         "path": "batch_runner.py",
-        "size": 4572,
-        "sha256": "c63692a3be3780b822de344dffa078f9aa33b1f65db39e047c3113287806ecda"
+        "size": 5290,
+        "sha256": "26284f66de19d0926dc24b61603c92d7c9be3d34149a9ebb6de7e2dbb753dc06"
       },
       {
         "path": "code_identity.py",
@@ -86,8 +86,8 @@
       },
       {
         "path": "pipeline_config.py",
-        "size": 6517,
-        "sha256": "114b03fc50a57db382139ac882b148d5cb496e9d47c556faefbf4c228308fc03"
+        "size": 6370,
+        "sha256": "490c02d317b3a9aceeb1b43f2c844f60d5b0c8c933d16d15ce18593780d14e5d"
       },
       {
         "path": "pipeline_orchestrator.py",
@@ -96,8 +96,8 @@
       },
       {
         "path": "pipeline_runtime.py",
-        "size": 12152,
-        "sha256": "33787dbe65ead70afdd4cd7969ff8f6f847c610453398536912abb6c20053fcf"
+        "size": 9973,
+        "sha256": "895444a0625f1e6fac2930bf827c8b0d4cbd7b490a428b31e8ea8d4b4620fb3b"
       },
       {
         "path": "process_control.py",
@@ -123,6 +123,11 @@
         "path": "signal_cleanup.py",
         "size": 670,
         "sha256": "6621e4dc787d26532273e40fd9cff4d4b9346124bb68f96706d48341af57aea4"
+      },
+      {
+        "path": "task_lock.py",
+        "size": 3993,
+        "sha256": "63c9837cce3329a07e92dc32b0977ced08ae6aa605a9b6541a7ff108b0138961"
       },
       {
         "path": "text_processing.py",

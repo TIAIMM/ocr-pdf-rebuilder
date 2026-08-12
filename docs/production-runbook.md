@@ -46,6 +46,18 @@ Individual failures are reported there and do not prevent later files from
 being attempted. The process exits nonzero if the completed batch contains any
 failed file.
 
+MinerU and Paddle share one non-blocking runtime lock at
+`tmp/ocr_pdf_rebuilder/task.lock`. A second GUI or CLI process reports the
+current owner PID, engine and start time, then exits with code 2 without
+rewriting the active task's summary. A stale `running` label in this diagnostic
+file after a hard crash is harmless: the kernel lock is authoritative and the
+next successful owner overwrites the metadata.
+
+No renderer path installs packages. Missing LaTeX, dvisvgm or svglib support is
+reported and falls back according to the existing formula policy. Provision
+dependencies outside a production task and confirm them with
+`scripts/verify-environment.sh`.
+
 For the local browser GUI, run:
 
 ```bash

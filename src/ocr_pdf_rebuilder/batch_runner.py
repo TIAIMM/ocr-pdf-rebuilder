@@ -7,6 +7,8 @@ from pathlib import Path
 import time
 import traceback
 
+from .task_lock import CrossProcessTaskLock, TaskLockBusyError
+
 
 class PdfBatchRunner:
     def __init__(
@@ -22,6 +24,7 @@ class PdfBatchRunner:
         engine_name: str = "MinerU",
         raw_label: str = "Raw",
         log_suffix: str = "mineru",
+        lock_path: Path | None = None,
     ) -> None:
         self.input_dir = input_dir
         self.output_dir = output_dir
@@ -33,6 +36,9 @@ class PdfBatchRunner:
         self.engine_name = engine_name
         self.raw_label = raw_label
         self.log_suffix = log_suffix
+        self.lock_path = lock_path or (
+            self.input_dir.parent / "tmp/ocr_pdf_rebuilder/task.lock"
+        )
 
     def write_summary(
         self,
@@ -64,6 +70,21 @@ class PdfBatchRunner:
         return summary_path, payload
 
     def run(self) -> None:
+        lock = CrossProcessTaskLock(
+            self.lock_path,
+            engine_name=self.engine_name,
+            input_dir=self.input_dir,
+            output_dir=self.output_dir,
+        )
+        try:
+            with lock:
+                self.logger(f"Task lock acquired: {self.lock_path}")
+                self._run_locked()
+        except TaskLockBusyError as exc:
+            self.logger(f"ERROR: {exc}")
+            raise SystemExit(2) from None
+
+    def _run_locked(self) -> None:
         pdfs = sorted(self.input_dir.glob("*.pdf"))
         if not pdfs:
             self.logger(f"No PDF files found in: {self.input_dir}")

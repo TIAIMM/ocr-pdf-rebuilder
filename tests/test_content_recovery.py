@@ -77,6 +77,25 @@ class ContentRecoveryTests(unittest.TestCase):
         self.assertEqual(block["formula_render_mode"], "image_crop")
         self.assertIn("latex failed", block["formula_render_error"])
 
+    def test_formula_dependency_probe_never_runs_an_installer(self):
+        with (
+            mock.patch.object(self.pipeline, "FORMULA_RENDER_DEPS", None),
+            mock.patch.object(self.pipeline.shutil, "which", return_value=None),
+            mock.patch.object(self.pipeline, "python_module_exists", return_value=False),
+            mock.patch.object(
+                self.pipeline.subprocess,
+                "run",
+                side_effect=AssertionError("dependency probe attempted to run a command"),
+            ) as run_command,
+        ):
+            dependencies = self.pipeline.formula_render_dependencies()
+        self.assertEqual(
+            dependencies,
+            {"latex": None, "dvisvgm": None, "svglib": False},
+        )
+        run_command.assert_not_called()
+        self.assertFalse(hasattr(self.pipeline, "install_formula_render_dependencies"))
+
 
 if __name__ == "__main__":
     unittest.main()

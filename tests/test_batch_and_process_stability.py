@@ -11,6 +11,7 @@ from unittest import mock
 
 from support import load_pipeline
 from ocr_pdf_rebuilder.batch_runner import PdfBatchRunner
+from ocr_pdf_rebuilder.task_lock import CrossProcessTaskLock, TaskLockBusyError
 
 
 class BatchAndProcessStabilityTests(unittest.TestCase):
@@ -57,6 +58,113 @@ class BatchAndProcessStabilityTests(unittest.TestCase):
         summary = self.pipeline.read_checkpoint(log_dir / "batch_summary.json")
         self.assertEqual(summary["status"], "completed_with_failures")
         self.assertEqual(summary["counts"], {"completed": 2, "skipped": 0, "failed": 1})
+
+    @unittest.skipUnless(os.name == "posix", "advisory file locking requires POSIX")
+    def test_task_lock_rejects_a_second_process_and_recovers_after_release(self):
+        lock_path = self.root / "runtime/tmp/ocr_pdf_rebuilder/task.lock"
+        lock = CrossProcessTaskLock(
+            lock_path,
+            engine_name="MinerU",
+            input_dir=self.root / "input",
+            output_dir=self.root / "output",
+        )
+        child_code = "\n".join(
+            [
+                "from pathlib import Path",
+                "from ocr_pdf_rebuilder.task_lock import CrossProcessTaskLock, TaskLockBusyError",
+                f"lock = CrossProcessTaskLock(Path({str(lock_path)!r}), engine_name='PaddleOCR-VL', input_dir=Path('input'), output_dir=Path('output'))",
+                "try:",
+                "    with lock:",
+                "        raise SystemExit(99)",
+                "except TaskLockBusyError:",
+                "    raise SystemExit(23)",
+            ]
+        )
+        environment = os.environ.copy()
+        source_root = str(Path(__file__).resolve().parents[1] / "src")
+        environment["PYTHONPATH"] = source_root + os.pathsep + environment.get(
+            "PYTHONPATH", ""
+        )
+
+        with lock:
+            result = subprocess.run(
+                [sys.executable, "-c", child_code],
+                env=environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 23, result.stderr)
+
+        with CrossProcessTaskLock(
+            lock_path,
+            engine_name="PaddleOCR-VL",
+            input_dir=self.root / "input",
+            output_dir=self.root / "output",
+        ):
+            pass
+        self.assertIn('"status": "released"', lock_path.read_text(encoding="utf-8"))
+
+    @unittest.skipUnless(os.name == "posix", "advisory file locking requires POSIX")
+    def test_task_lock_reports_owner_in_same_process_contention(self):
+        lock_path = self.root / "task.lock"
+        first = CrossProcessTaskLock(
+            lock_path,
+            engine_name="MinerU",
+            input_dir=self.root / "input",
+            output_dir=self.root / "output",
+        )
+        second = CrossProcessTaskLock(
+            lock_path,
+            engine_name="PaddleOCR-VL",
+            input_dir=self.root / "input",
+            output_dir=self.root / "output",
+        )
+        with first, self.assertRaisesRegex(
+            TaskLockBusyError, r"pid=.*engine=MinerU"
+        ):
+            with second:
+                pass
+
+    @unittest.skipUnless(os.name == "posix", "advisory file locking requires POSIX")
+    def test_busy_batch_does_not_overwrite_active_summary(self):
+        input_dir = self.root / "input"
+        input_dir.mkdir()
+        (input_dir / "book.pdf").write_bytes(b"fixture")
+        log_dir = self.root / "logs"
+        summary_path = log_dir / "batch_summary.json"
+        self.pipeline.write_checkpoint(
+            summary_path,
+            {"schema": 1, "status": "running", "owner": "first"},
+        )
+        lock_path = self.root / "runtime/task.lock"
+        runner = PdfBatchRunner(
+            input_dir=input_dir,
+            output_dir=self.root / "output",
+            mineru_output_dir=self.root / "raw",
+            log_dir=log_dir,
+            process_pdf=mock.Mock(),
+            write_checkpoint=self.pipeline.write_checkpoint,
+            logger=lambda _message: None,
+            lock_path=lock_path,
+        )
+        active_lock = CrossProcessTaskLock(
+            lock_path,
+            engine_name="PaddleOCR-VL",
+            input_dir=input_dir,
+            output_dir=self.root / "other-output",
+        )
+        with active_lock, self.assertRaises(SystemExit) as exit_context:
+            runner.run()
+
+        self.assertEqual(exit_context.exception.code, 2)
+        self.assertEqual(
+            self.pipeline.read_checkpoint(summary_path),
+            {"schema": 1, "status": "running", "owner": "first"},
+        )
+        runner.process_pdf.assert_not_called()
 
     @unittest.skipUnless(os.name == "posix", "process-group semantics require POSIX")
     def test_total_timeout_kills_descendant_process_group(self):

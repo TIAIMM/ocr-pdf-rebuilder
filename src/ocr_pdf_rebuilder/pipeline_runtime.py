@@ -72,75 +72,11 @@ def python_module_exists(name):
         return True
     except Exception:
         return False
-def command_prefix_for_system_install():
-    try:
-        is_root = subprocess.run(
-            ["id", "-u"],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        ).stdout.strip() == "0"
-    except Exception:
-        is_root = False
-    if is_root:
-        return []
-    if command_exists("sudo"):
-        return ["sudo", "-n"]
-    return None
-def run_install_command(cmd, label):
-    log(f"    Formula dependency install: {label}: {' '.join(cmd)}")
-    try:
-        result = subprocess.run(
-            cmd,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
-    except Exception as exc:
-        log(f"    Formula dependency install failed to start: {label}: {exc}")
-        return False
-    if result.returncode != 0:
-        tail = "\n".join((result.stdout or "").splitlines()[-12:])
-        log(f"    Formula dependency install failed: {label}, exit={result.returncode}")
-        if tail:
-            log(tail)
-        return False
-    return True
-def install_formula_render_dependencies():
-    if not AUTO_INSTALL_FORMULA_DEPS:
-        return
-    needs_system = not ((command_exists("latex") or command_exists("pdflatex")) and command_exists("dvisvgm"))
-    if needs_system and command_exists("apt-get"):
-        prefix = command_prefix_for_system_install()
-        if prefix is None:
-            log("    Formula dependency install skipped: apt-get requires root/sudo")
-        else:
-            run_install_command(prefix + ["apt-get", "update"], "apt-get update")
-            run_install_command(
-                prefix
-                + [
-                    "env",
-                    "DEBIAN_FRONTEND=noninteractive",
-                    "apt-get",
-                    "install",
-                    "-y",
-                    *FORMULA_APT_PACKAGES,
-                ],
-                "apt-get install formula packages",
-            )
-    if not python_module_exists("svglib"):
-        run_install_command(
-            [sys.executable, "-m", "pip", "install", *FORMULA_PIP_PACKAGES],
-            "pip install formula packages",
-        )
 def formula_render_dependencies():
     global FORMULA_RENDER_DEPS
     if FORMULA_RENDER_DEPS is not None:
         return FORMULA_RENDER_DEPS
 
-    install_formula_render_dependencies()
     latex_engine = shutil.which("latex") or shutil.which("pdflatex")
     FORMULA_RENDER_DEPS = {
         "latex": latex_engine,
@@ -150,7 +86,8 @@ def formula_render_dependencies():
     missing = [key for key, value in FORMULA_RENDER_DEPS.items() if not value]
     if missing:
         log(
-            "    Formula vector rendering unavailable; using text fallback. Missing: "
+            "    Formula vector rendering unavailable; environment is read-only and "
+            "the renderer will use its configured fallback. Missing: "
             + ", ".join(missing)
         )
     return FORMULA_RENDER_DEPS

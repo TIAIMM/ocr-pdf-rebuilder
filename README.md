@@ -12,6 +12,12 @@ Runtime directories now live directly under this repository. Books, generated
 PDFs, fonts, logs, checkpoints and QC renders are excluded by `.gitignore`; they
 remain local and must not be staged or committed.
 
+Only one MinerU or Paddle batch may use a runtime root at a time. Both CLI and
+GUI jobs acquire `tmp/ocr_pdf_rebuilder/task.lock`; a competing process exits
+without touching the active batch summary or output tree. The operating system
+releases the advisory lock automatically after normal exit, interruption or a
+crash.
+
 ## Repository snapshot
 
 The complete `ocr_pdf_rebuilder` source package has a deterministic, per-file
@@ -79,6 +85,11 @@ The captured production environment is:
 
 Python dependencies are pinned in `requirements.lock`; system packages and font
 hashes are recorded under `provenance/`.
+
+Rendering is environment-read-only. It never invokes `apt-get`, `sudo` or
+`pip install`. Missing formula-vector dependencies are reported and handled by
+the existing text/image fallback; install or repair dependencies explicitly
+during environment provisioning, then rerun the read-only preflight.
 
 ## Tests
 

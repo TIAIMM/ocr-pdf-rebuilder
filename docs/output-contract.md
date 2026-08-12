@@ -1,0 +1,26 @@
+# Output contract
+
+For an input named `book.pdf`, successful processing creates:
+
+- `book_mineru.pdf`: text-only reconstructed PDF;
+- `book_mineru.md`: page-delimited Markdown representation;
+- `book_mineru.version`: integrity-protected completed-state record;
+- `book_mineru_with_images.pdf`: created only when one or more pages require an
+  image fallback.
+
+Required properties:
+
+1. Every produced PDF has exactly the same page count as the source.
+2. Trailing source blank pages are retained as blank pages.
+3. The text-only PDF contains no raster images.
+4. Handwriting, unusable scan and full-page-image fallback pages are blank in
+   the text-only PDF.
+5. The corresponding pages contain rasterized source pages in the image variant.
+6. Formulas are rendered when safe; a failed formula renderer uses the defined
+   text/crop fallback without inserting LaTeX residue into normal text.
+7. Nested table HTML and footnotes remain available to reconstruction.
+8. A completion state is reusable only when source, outputs, runtime and page
+   counts still match.
+
+The `.version` suffix is historical; its content is checksummed JSON state, not
+a simple version string.

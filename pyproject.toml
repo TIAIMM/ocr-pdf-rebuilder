@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools==80.10.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "document-ocr-pipeline"
+version = "0.1.0"
+description = "Resumable, failure-isolated OCR and PDF reconstruction pipeline."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "mineru==3.3.1",
+  "Pillow==12.2.0",
+  "PyMuPDF==1.27.2.3",
+  "reportlab==4.5.1",
+  "svglib==2.0.2",
+]
+
+[project.scripts]
+document-ocr-pipeline = "document_ocr_pipeline.mineru_textonly_pdf:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.unittest]
+start-directory = "tests"

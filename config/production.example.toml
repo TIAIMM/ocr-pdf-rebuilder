@@ -1,0 +1,41 @@
+# This records the current production defaults. The preserved baseline script
+# still owns these values; this file is the contract for a later config refactor.
+
+[paths]
+input = "/home/ocr/ocr_jobs/input"
+output = "/home/ocr/ocr_jobs/pdf_mineru"
+raw_output = "/home/ocr/ocr_jobs/mineru_output"
+temporary = "/home/ocr/ocr_jobs/tmp/mineru_textonly_pdf"
+logs = "/home/ocr/ocr_jobs/logs_mineru"
+quality_control = "/home/ocr/ocr_jobs/qc_mineru"
+fonts = "/home/ocr/ocr_jobs/fonts"
+
+[rendering]
+dpi = 200
+formula_dpi = 300
+text_only_output = true
+image_variant_for_fallback_pages = true
+
+[mineru]
+command = "mineru"
+backend = "hybrid-engine"
+method = "auto"
+effort = "medium"
+formula = true
+table = true
+image_analysis = false
+client_side_output_generation = true
+max_pages_per_task = 60
+min_pages_per_task = 1
+
+[timeouts]
+process_seconds = 7200
+idle_seconds = 1200
+terminate_grace_seconds = 20
+exit_cleanup_seconds = 5
+
+[resume]
+checkpoint_schema = 2
+skip_existing = true
+clean_temporary_on_success = false
+delete_intermediate_on_success = false

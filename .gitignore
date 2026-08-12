@@ -1,0 +1,74 @@
+# Runtime inputs and generated products
+/input/
+/pdf/
+/pdf_*/
+/mineru_output/
+/dots_output/
+/paddle_test_output/
+/qc_*/
+/logs_*/
+/tmp/
+/work/
+/artifacts/
+
+# Models and caches
+/models/
+/.cache/
+*.safetensors
+*.pth
+*.onnx
+*.engine
+*.gguf
+
+# Source documents and rendered pages
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+*.bmp
+
+# Runtime state
+job_state.json
+batch_summary.json
+*.checkpoint
+*.version
+*.log
+*.pid
+
+# Fonts are provisioned outside the repository
+*.ttf
+*.ttc
+*.otf
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+config/local.toml
+config/production.toml
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Deployment backups must stay in the runtime tree
+.deploy-backups/

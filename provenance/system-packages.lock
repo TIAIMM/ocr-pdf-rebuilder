@@ -1,0 +1,8 @@
+# Captured from the production WSL instance on 2026-08-12.
+# The distribution is named Ubuntu-24.04-OCR but currently runs Ubuntu 22.04.5 LTS.
+dvisvgm==2.13.1-1
+fonts-dejavu-core==2.37-2build1
+fonts-noto-mono==20201225-1build1
+poppler-utils==22.02.0-2ubuntu0.13
+texlive-latex-base==2021.20220204-1
+texlive-latex-extra==2021.20220204-1

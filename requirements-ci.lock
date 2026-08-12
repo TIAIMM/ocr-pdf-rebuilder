@@ -1,0 +1,4 @@
+# Minimal, exact CPU dependencies used by the generated regression tests.
+# GitHub Actions installs these with --no-deps.
+Pillow==12.2.0
+PyMuPDF==1.27.2.3

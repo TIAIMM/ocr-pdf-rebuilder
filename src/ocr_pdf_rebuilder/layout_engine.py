@@ -30,9 +30,17 @@ def cell_to_block(cell, order, page_width, page_height, image_size):
     elif bbox_units == "mineru_1000":
         image_width = 1000.0
         image_height = 1000.0
-    elif bbox_units == "pdf" or (
+    elif bbox_units == "pdf":
+        image_width = page_width
+        image_height = page_height
+    elif bbox_units == "image" and image_size:
+        image_width, image_height = image_size
+    elif bbox_units is None and (
         x1 <= page_width * 1.35 and y1 <= page_height * 1.35
     ):
+        # Coordinate guessing is only safe for legacy cells that do not state
+        # their units. PaddleOCR image-space boxes near the upper-left can be
+        # numerically smaller than a large PDF page and must still be scaled.
         image_width = page_width
         image_height = page_height
     elif image_size:
@@ -1150,4 +1158,3 @@ def component_exports():
 
 def invoke_component(name, namespace, *args, **kwargs):
     return _COMPONENT_RUNTIME.invoke(name, namespace, *args, **kwargs)
-

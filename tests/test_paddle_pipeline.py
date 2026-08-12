@@ -17,6 +17,26 @@ from ocr_pdf_rebuilder import paddle_pipeline, paddle_worker
 
 
 class PaddlePipelineTests(unittest.TestCase):
+    def test_explicit_image_bbox_is_scaled_even_when_values_resemble_pdf_units(self):
+        cell = {
+            "bbox": [485.0, 2149.0, 555.0, 2220.0],
+            "category": "Text",
+            "text": "10",
+            "__bbox_units": "image",
+        }
+        block = paddle_pipeline.shared.cell_to_block(
+            cell,
+            3,
+            1392.0,
+            2040.0,
+            [3867, 5667],
+        )
+        self.assertIsNotNone(block)
+        self.assertAlmostEqual(block["left"], 174.6, places=1)
+        self.assertAlmostEqual(block["top"], 773.6, places=1)
+        self.assertAlmostEqual(block["width"], 25.2, places=1)
+        self.assertAlmostEqual(block["height"], 25.6, places=1)
+
     def test_paddle_blocks_are_normalized_for_shared_layout_engine(self):
         raw = {
             "res": {

@@ -7,7 +7,7 @@ cd "$repo_root"
 mapfile -t files < <(git diff --cached --name-only --diff-filter=ACMR)
 (( ${#files[@]} > 0 )) || { printf 'FAIL: no staged files\n' >&2; exit 1; }
 
-forbidden='(^|/)(input|pdf(_[^/]*)?|mineru_output|dots_output|qc_[^/]*|logs_[^/]*|tmp|models|fonts)/|\.(pdf|png|jpe?g|tiff?|bmp|safetensors|pth|onnx|engine|gguf|ttf|ttc|otf|log|pyc)$|(^|/)(job_state|batch_summary)\.json$'
+forbidden='(^|/)(input|pdf(_[^/]*)?|mineru_output|paddle_output|paddle_test_output|dots_output|qc_[^/]*|logs_[^/]*|tmp|models|fonts|work|artifacts|\.cache|\.deploy-backups)/|\.(pdf|png|jpe?g|tiff?|bmp|safetensors|pth|onnx|engine|gguf|ttf|ttc|otf|log|pyc)$|(^|/)(job_state|batch_summary)\.json$'
 if printf '%s\n' "${files[@]}" | grep -Ei "$forbidden"; then
     printf 'FAIL: forbidden runtime/generated content is staged\n' >&2
     exit 2

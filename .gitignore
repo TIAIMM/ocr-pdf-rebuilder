@@ -1,13 +1,4 @@
-# Repository-local runtime inputs and generated products
-/input/
-/pdf_mineru/
-/mineru_output/
-/logs_mineru/
-/qc_mineru/
-/tmp/
-/fonts/
-
-# Legacy/generated product names
+# Legacy and generic generated product names
 /pdf/
 /pdf_*/
 /dots_output/
@@ -16,6 +7,23 @@
 /logs_*/
 /work/
 /artifacts/
+
+# Active repository-local runtime: shared input and provisioned fonts
+/input/
+/fonts/
+/tmp/
+
+# MinerU runtime outputs (kept explicit for auditability)
+/pdf_mineru/
+/mineru_output/
+/logs_mineru/
+/qc_mineru/
+
+# PaddleOCR runtime outputs (kept explicit for auditability)
+/pdf_paddle/
+/paddle_output/
+/logs_paddle/
+/qc_paddle/
 
 # Models and caches
 /models/
@@ -78,4 +86,4 @@ Thumbs.db
 desktop.ini
 
 # Deployment backups must stay in the runtime tree
-.deploy-backups/
+/.deploy-backups/

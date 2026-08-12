@@ -28,6 +28,18 @@ Individual failures are reported there and do not prevent later files from
 being attempted. The process exits nonzero if the completed batch contains any
 failed file.
 
+For the local browser GUI, run:
+
+```bash
+cd /home/ocr/ocr-pdf-rebuilder
+./scripts/run-gui.sh
+```
+
+The GUI preserves the same all-PDF batch and checkpoint behavior. “安全停止”
+sends an interrupt to the controller so its existing bounded MinerU process-group
+cleanup can run; wait for the status to leave “正在安全停止” before closing the
+GUI terminal.
+
 ## Acceptance
 
 - batch summary reaches `completed` or the failed files are explicitly handled;

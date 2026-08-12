@@ -104,6 +104,22 @@ pixels, including a trailing blank page. It does not invoke MinerU or read books
 Operational details and recovery rules are in `docs/production-runbook.md` and
 `docs/failure-recovery.md`.
 
+## Local GUI
+
+Start the lightweight local web interface inside WSL:
+
+```bash
+cd /home/ocr/ocr-pdf-rebuilder
+./scripts/run-gui.sh
+```
+
+Open `http://localhost:8765/` if the browser does not open automatically. The
+GUI lists PDFs from `/home/ocr/ocr_jobs/input`, starts the unchanged production
+batch, streams its console output, requests the existing safe process-group
+cleanup when stopped, displays `batch_summary.json`, and offers generated PDFs
+for download. It binds to localhost by default and has no upload or delete
+operation.
+
 ## License status
 
 No public license has been selected. Until code provenance and third-party

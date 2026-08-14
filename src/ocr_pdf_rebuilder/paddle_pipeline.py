@@ -753,19 +753,16 @@ def build_outputs(
                     )
                 )
                 blocks = shared.prepare_blocks(blocks, page_width, page_height)
-                failures = shared.reportlab_page_fit_failures(
-                    page_height, blocks
+                blocks, failures = shared.fallback_unfitting_layout_page(
+                    pdf_path,
+                    page_index,
+                    result,
+                    blocks,
+                    page_width,
+                    page_height,
+                    work_dir,
                 )
                 if failures:
-                    image_path = work_dir / "layout_image_fallback_pages" / f"page_{page_index + 1:04d}.png"
-                    shared.render_pdf_page_to_png(pdf_path, page_index, image_path)
-                    result["image_fallback_path"] = str(image_path)
-                    result["image_fallback_page"] = True
-                    result["layout_fit_failures"] = failures
-                    shared.append_retry_reason(
-                        result, shared.UNFITTING_LAYOUT_IMAGE_FALLBACK_REASON
-                    )
-                    blocks = [shared.image_fallback_block(image_path, page_width, page_height)]
                     log(
                         f"        Page {page_index + 1}: {len(failures)} OCR block(s) "
                         "could not fit safely; used source page image fallback"

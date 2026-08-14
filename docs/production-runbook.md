@@ -86,9 +86,15 @@ after 30 seconds it escalates termination. Wait for the status to leave
   use the vector formula path;
 - `paddle_bbox_content_repaired` pages are reviewed to confirm the reference
   marker and reassigned body occupy their distinct source-layout boxes;
+- short OCR lines with trustworthy source-line coordinates retain the bbox's
+  existing indentation; a numbered reference must not gain a second Markdown
+  list indent or wrap solely because a fit-search step skipped its lower bound;
+- dense sequential reference/endnote pages use neighbouring compact line boxes
+  to recover note-size text and keep a non-compressed line-spacing floor;
 - any unresolved non-formula OCR block that cannot fit its bbox produces a
   blank text-only page plus a source-image page in the image variant instead of
-  clipping text or aborting the batch;
+  clipping text or aborting the batch. This all-block preflight applies to both
+  MinerU and PaddleOCR-VL, not only to tables;
 - no MinerU, Paddle worker or Paddle vLLM process group remains;
 - completed-state reuse succeeds on an unchanged rerun.
 - a source-code change rejects old intermediate checkpoints and completion

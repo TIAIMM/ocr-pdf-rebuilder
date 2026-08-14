@@ -804,6 +804,66 @@ def reportlab_draw_line_info_block(c, page_height, block, dry_run=False, fontsiz
     return True
 
 
+def strict_tiny_source_line(block):
+    """Return one trustworthy OCR source line whose bbox already carries indentation."""
+
+    if not isinstance(block, dict):
+        return None
+    if block.get("category") in {"Formula", "ImageFallback", "Table"}:
+        return None
+    lines = block.get("line_info") or []
+    if len(lines) != 1:
+        return None
+    line = lines[0]
+    text = normalize_markdown_text(line.get("text", ""))
+    if not text or "\n" in text or len(text) > 80:
+        return None
+    if normalize_text(text) != normalize_text(block.get("text", "")):
+        return None
+    rect = line_info_rect(block, line)
+    if rect is None or rect.height > 8.0:
+        return None
+    return {"text": text, "rect": rect}
+
+
+def reportlab_draw_strict_tiny_source_line(c, page_height, block, fontsize, dry_run=False):
+    """Draw a tiny source line literally, without adding Markdown list indentation."""
+
+    line = strict_tiny_source_line(block)
+    if line is None:
+        return None
+    segments = split_reportlab_font_runs(inline_markdown_segments(line["text"]))
+    if not segments:
+        return True
+    rect = line["rect"]
+    line_fontsize = float(fontsize)
+    line_width = reportlab_measure_segments(segments, "normal", line_fontsize)
+    if line_fontsize > rect.height + 0.01 or line_width > rect.width + 0.01:
+        return False
+    if dry_run:
+        return True
+
+    align = block_align(block)
+    if align == fitz.TEXT_ALIGN_CENTER and line_width < rect.width:
+        x = rect.x0 + (rect.width - line_width) / 2
+    else:
+        x = rect.x0
+    y_top = rect.y0 + max(0.0, (rect.height - line_fontsize) / 2)
+    baseline = page_height - y_top - line_fontsize
+    for seg in segments:
+        seg_text = normalize_draw_segment_text(
+            seg["text"],
+            strip_markdown=seg["style"] != "code",
+        )
+        if not seg_text:
+            continue
+        fontname, fake_bold = reportlab_font_for_segment(seg, "normal")
+        width = reportlab_text_width(seg_text, fontname, line_fontsize)
+        reportlab_draw_text(c, x, baseline, seg_text, fontname, line_fontsize, fake_bold)
+        x += width
+    return True
+
+
 def normalize_narrow_vertical_text(text):
     text = normalize_markdown_text(text)
     return re.sub(r"\s+", " ", text).strip()
@@ -897,7 +957,15 @@ def reportlab_draw_rotated_narrow_textbox(
     return True
 
 
-def reportlab_markdown_textbox_layout(page_height, rect, text, fontsize, line_height, align):
+def reportlab_markdown_textbox_layout(
+    page_height,
+    rect,
+    text,
+    fontsize,
+    line_height,
+    align,
+    literal_numbered=False,
+):
     text = normalize_markdown_text(text)
     assert_no_radicals_in_text(text, "reportlab markdown textbox")
     lines = re.split(r"\n+", text) if text else []
@@ -905,7 +973,10 @@ def reportlab_markdown_textbox_layout(page_height, rect, text, fontsize, line_he
     layout = []
 
     for line in lines:
-        segments, indent, line_style = markdown_line_to_segments(line)
+        if literal_numbered and NUMBERED_LAYOUT_TEXT_RE.match(line.strip()):
+            segments, indent, line_style = inline_markdown_segments(line.strip()), 0, "normal"
+        else:
+            segments, indent, line_style = markdown_line_to_segments(line)
         segments = split_reportlab_font_runs(segments)
         line_fontsize = fontsize * line_font_scale(line_style)
         line_gap = line_fontsize * line_height
@@ -964,8 +1035,26 @@ def reportlab_markdown_textbox_layout(page_height, rect, text, fontsize, line_he
     return layout
 
 
-def reportlab_draw_markdown_textbox(c, page_height, rect, text, fontsize, line_height, align, dry_run=False):
-    layout = reportlab_markdown_textbox_layout(page_height, rect, text, fontsize, line_height, align)
+def reportlab_draw_markdown_textbox(
+    c,
+    page_height,
+    rect,
+    text,
+    fontsize,
+    line_height,
+    align,
+    dry_run=False,
+    literal_numbered=False,
+):
+    layout = reportlab_markdown_textbox_layout(
+        page_height,
+        rect,
+        text,
+        fontsize,
+        line_height,
+        align,
+        literal_numbered=literal_numbered,
+    )
     if layout is None:
         return False
     if dry_run:
@@ -1010,6 +1099,15 @@ def reportlab_box_fits(page_height, rect, block_or_text, fontsize, line_height, 
     ):
         return True
     if isinstance(block_or_text, dict):
+        strict_line_ok = reportlab_draw_strict_tiny_source_line(
+            None,
+            page_height,
+            block_or_text,
+            fontsize,
+            dry_run=True,
+        )
+        if strict_line_ok is not None:
+            return strict_line_ok
         line_ok = reportlab_draw_line_info_block(
             None,
             page_height,
@@ -1020,7 +1118,18 @@ def reportlab_box_fits(page_height, rect, block_or_text, fontsize, line_height, 
         )
         if line_ok is True:
             return True
-    return reportlab_textbox_fits(page_height, rect, text, fontsize, line_height, align)
+    return reportlab_textbox_fits(
+        page_height,
+        rect,
+        text,
+        fontsize,
+        line_height,
+        align,
+        literal_numbered=bool(
+            isinstance(block_or_text, dict)
+            and block_or_text.get("preserve_numbered_bbox_indent")
+        ),
+    )
 
 
 def line_height_candidates(start_line_height, preferred_line_height, min_line_height, line_step):
@@ -1048,15 +1157,35 @@ def line_height_candidates(start_line_height, preferred_line_height, min_line_he
     return result
 
 
+def descending_candidates(start, minimum, step):
+    """Return a descending numeric search that always tests its lower bound."""
+
+    start = float(start)
+    minimum = float(minimum)
+    step = max(0.001, float(step))
+    if start < minimum - 0.001:
+        return []
+
+    values = []
+    current = start
+    while current > minimum + 0.001:
+        values.append(round(current, 3))
+        current -= step
+    values.append(round(minimum, 3))
+    return list(dict.fromkeys(values))
+
+
 def reportlab_fit_box_params(page_height, rect, block_or_text, fontsize, min_size, line_height, align):
     if isinstance(block_or_text, dict):
         min_line_height = min_line_height_for_block(block_or_text)
         preferred_line_height = preferred_line_height_for_block(block_or_text)
         enforce_body_font_floor = bool(block_or_text.get("enforce_body_font_floor"))
+        preserve_source_line_spacing = bool(block_or_text.get("preserve_source_line_spacing"))
     else:
         min_line_height = 0.82
         preferred_line_height = 1.16
         enforce_body_font_floor = False
+        preserve_source_line_spacing = False
 
     min_size = max(3.8, float(min_size))
     start_fontsize = float(fontsize)
@@ -1085,30 +1214,66 @@ def reportlab_fit_box_params(page_height, rect, block_or_text, fontsize, min_siz
 
     if enforce_body_font_floor:
         emergency_min_line_height = BODY_TEXT_FLOOR_LINE_HEIGHT_MIN
-        current_line_height = min_line_height - line_step
-        while current_line_height >= emergency_min_line_height - 0.001:
-            current_font = start_fontsize
-            while current_font >= soft_font_floor - 0.001:
+        for current_line_height in descending_candidates(
+            min_line_height - line_step,
+            emergency_min_line_height,
+            line_step,
+        ):
+            for current_font in descending_candidates(
+                start_fontsize,
+                soft_font_floor,
+                font_step,
+            ):
                 if reportlab_box_fits(page_height, rect, block_or_text, current_font, current_line_height, align):
                     return current_font, current_line_height, True
-                current_font -= font_step
-            current_line_height -= line_step
 
-    emergency_min_size = 3.2
-    emergency_min_line_height = 0.68
-    current_line_height = min_line_height - line_step
-    while current_line_height >= emergency_min_line_height - 0.001:
-        current_font = min(soft_font_floor - font_step, start_fontsize) if enforce_body_font_floor else min(min_size, start_fontsize)
-        while current_font >= emergency_min_size - 0.001:
+    # The former decrementing loop could step directly from 3.29 to 3.04 and
+    # never enter a search whose fixed lower bound was 3.2 pt. Already-tiny
+    # source reference text may legitimately need the same 2.6 pt emergency
+    # floor used by the line-coordinate renderer to remain on one source line.
+    emergency_floor = (
+        2.6
+        if start_fontsize < 3.8 or preserve_source_line_spacing
+        else 3.2
+    )
+    emergency_min_size = min(emergency_floor, start_fontsize)
+    emergency_min_line_height = min_line_height if preserve_source_line_spacing else 0.68
+    emergency_start_font = (
+        min(soft_font_floor - font_step, start_fontsize)
+        if enforce_body_font_floor
+        else min(min_size, start_fontsize)
+    )
+    emergency_start_font = max(emergency_min_size, emergency_start_font)
+    emergency_line_height_start = (
+        min_line_height
+        if preserve_source_line_spacing
+        else min_line_height - line_step
+    )
+    for current_line_height in descending_candidates(
+        emergency_line_height_start,
+        emergency_min_line_height,
+        line_step,
+    ):
+        for current_font in descending_candidates(
+            emergency_start_font,
+            emergency_min_size,
+            font_step,
+        ):
             if reportlab_box_fits(page_height, rect, block_or_text, current_font, current_line_height, align):
                 return current_font, current_line_height, True
-            current_font -= font_step
-        current_line_height -= line_step
 
     return emergency_min_size, emergency_min_line_height, False
 
 
-def reportlab_textbox_fits(page_height, rect, text, fontsize, line_height, align):
+def reportlab_textbox_fits(
+    page_height,
+    rect,
+    text,
+    fontsize,
+    line_height,
+    align,
+    literal_numbered=False,
+):
     from reportlab.pdfgen import canvas
     from io import BytesIO
 
@@ -1122,6 +1287,7 @@ def reportlab_textbox_fits(page_height, rect, text, fontsize, line_height, align
         line_height,
         align,
         dry_run=True,
+        literal_numbered=literal_numbered,
     )
 
 
@@ -1315,22 +1481,56 @@ def render_blocks_to_pdf_reportlab(
                     fontsize,
                     min_size,
                 )
-            elif block["category"] == "Table":
-                drawn = reportlab_draw_table_block(c, page_height, rect, block, fontsize, line_height)
             else:
-                line_drawn = reportlab_draw_line_info_block(
+                strict_line_drawn = reportlab_draw_strict_tiny_source_line(
                     c,
                     page_height,
                     block,
                     fontsize=fontsize,
-                    min_fontsize=min_size,
                 )
-                if line_drawn is None:
-                    drawn = reportlab_draw_markdown_textbox(c, page_height, rect, text, fontsize, line_height, align)
-                elif line_drawn is False:
-                    drawn = reportlab_draw_markdown_textbox(c, page_height, rect, text, fontsize, line_height, align)
+                if strict_line_drawn is not None:
+                    drawn = strict_line_drawn
+                elif block["category"] == "Table":
+                    drawn = reportlab_draw_table_block(
+                        c,
+                        page_height,
+                        rect,
+                        block,
+                        fontsize,
+                        line_height,
+                    )
                 else:
-                    drawn = line_drawn
+                    line_drawn = reportlab_draw_line_info_block(
+                        c,
+                        page_height,
+                        block,
+                        fontsize=fontsize,
+                        min_fontsize=min_size,
+                    )
+                    if line_drawn is None:
+                        drawn = reportlab_draw_markdown_textbox(
+                            c,
+                            page_height,
+                            rect,
+                            text,
+                            fontsize,
+                            line_height,
+                            align,
+                            literal_numbered=bool(block.get("preserve_numbered_bbox_indent")),
+                        )
+                    elif line_drawn is False:
+                        drawn = reportlab_draw_markdown_textbox(
+                            c,
+                            page_height,
+                            rect,
+                            text,
+                            fontsize,
+                            line_height,
+                            align,
+                            literal_numbered=bool(block.get("preserve_numbered_bbox_indent")),
+                        )
+                    else:
+                        drawn = line_drawn
             if not drawn:
                 snippet = re.sub(r"\s+", " ", text).strip()[:120]
                 raise RuntimeError(
@@ -1379,6 +1579,8 @@ _COMPONENT_EXPORTS = (
     "reportlab_fit_line_fontsize",
     "reportlab_draw_line_in_rect",
     "reportlab_draw_line_info_block",
+    "strict_tiny_source_line",
+    "reportlab_draw_strict_tiny_source_line",
     "normalize_narrow_vertical_text",
     "is_narrow_vertical_text_block",
     "reportlab_rotated_narrow_fontsize",
@@ -1388,6 +1590,7 @@ _COMPONENT_EXPORTS = (
     "reportlab_fit_fontsize",
     "reportlab_box_fits",
     "line_height_candidates",
+    "descending_candidates",
     "reportlab_fit_box_params",
     "reportlab_textbox_fits",
     "reportlab_table_fits",

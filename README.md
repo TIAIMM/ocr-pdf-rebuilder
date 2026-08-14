@@ -48,11 +48,12 @@ components have no dependency back to either CLI entry point:
   loading;
 - `text_processing.py`: OCR text cleanup, Markdown/LaTeX normalization and
   formula preparation;
-- `page_recovery.py`: bad-page retries, forward-page leak repair and safe image
-  or source-text fallbacks;
-- `layout_engine.py`: cell-to-block conversion, fitting, reflow and Markdown
-  reconstruction;
-- `reportlab_renderer.py`: font selection, measurement, registered-glyph
+- `page_recovery.py`: bad-page retries, forward-page leak repair, shared
+  all-block fit preflight and safe image or source-text fallbacks;
+- `layout_engine.py`: cell-to-block conversion, fitting, dense numbered-note
+  sizing, reflow and Markdown reconstruction;
+- `reportlab_renderer.py`: font selection, measurement, exact fitting-boundary
+  searches, source-positioned numbered-text rendering, registered-glyph
   coverage checks, visible missing-glyph fallback and PDF drawing;
 - `qc_reporting.py`: suspect-page analysis, debug artifacts and QC reports;
 - `pipeline_orchestrator.py`: one-document production flow and workspace

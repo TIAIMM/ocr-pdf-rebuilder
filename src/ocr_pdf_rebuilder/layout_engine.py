@@ -272,6 +272,64 @@ def is_body_text_block(block):
     return True
 
 
+NUMBERED_LAYOUT_TEXT_RE = re.compile(r"^\s*(\d{1,4})[.)]\s+\S")
+
+
+def numbered_layout_text_number(block):
+    """Return the leading item number for an OCR-positioned numbered block."""
+
+    if block.get("category") not in {"Text", "List-item"}:
+        return None
+    match = NUMBERED_LAYOUT_TEXT_RE.match(clean_block_text(block))
+    return int(match.group(1)) if match else None
+
+
+def dense_numbered_note_page_font_size(blocks, page_height):
+    """Detect compact endnote/reference pages and recover their natural text size.
+
+    MinerU sometimes emits one logical cell per numbered note but only one
+    ``line_info`` entry for the entire multi-line cell. Treating that bbox as a
+    single source line inflates the estimated font size and then forces unsafe
+    line-height compression. A dense, mostly sequential numbered page provides
+    enough neighbouring one-line boxes to estimate the original note size.
+    """
+
+    text_blocks = [
+        block
+        for block in blocks
+        if block.get("category") in {"Text", "List-item"} and clean_block_text(block)
+    ]
+    numbered = [
+        (block, numbered_layout_text_number(block))
+        for block in text_blocks
+        if numbered_layout_text_number(block) is not None
+    ]
+    if len(numbered) < 8 or len(numbered) / max(1, len(text_blocks)) < 0.75:
+        return None
+
+    numbers = [number for _block, number in numbered]
+    increasing_pairs = sum(1 for first, second in zip(numbers, numbers[1:]) if second > first)
+    if increasing_pairs / max(1, len(numbers) - 1) < 0.75:
+        return None
+
+    heights = sorted(
+        float(block.get("height", 0.0))
+        for block, _number in numbered
+        if float(block.get("height", 0.0)) > 0.0
+    )
+    median_height = median(heights)
+    if median_height is None or median_height > float(page_height) * 0.035:
+        return None
+
+    compact_heights = [height for height in heights if height <= median_height + 0.01]
+    compact_line_height = median(compact_heights) or median_height
+    return clamp(
+        compact_line_height / 1.20,
+        2.6,
+        10.5 * page_font_scale(page_height),
+    )
+
+
 def is_misclassified_long_header_footer(block, page_width):
     if block.get("category") not in {"Page-header", "Page-footer"}:
         return False
@@ -476,6 +534,9 @@ def estimate_line_height(block, font_size):
     raw = block["height"] / max(font_size * visual_lines, 1)
     category = block["category"]
     clean_text = clean_block_text(block)
+
+    if block.get("dense_numbered_note"):
+        return clamp(raw, 1.08, 1.35)
 
     if category in {"Title", "Section-header"}:
         return clamp(raw, 0.95, 1.20)
@@ -708,6 +769,8 @@ def clamp_split_retry_blocks_to_page_margins(blocks, page_width):
 
 
 def min_line_height_for_block(block):
+    if block.get("preserve_source_line_spacing"):
+        return 1.00
     category = block["category"]
     if category in {"Page-header", "Page-footer"} or is_numeric_page_marker(clean_block_text(block)):
         return 0.82
@@ -723,6 +786,9 @@ def min_line_height_for_block(block):
 def preferred_line_height_for_block(block):
     category = block["category"]
     clean_text = clean_block_text(block)
+
+    if block.get("preserve_source_line_spacing"):
+        return 1.15
 
     if category in {"Page-header", "Page-footer"} or is_numeric_page_marker(clean_text):
         return 1.00
@@ -901,7 +967,7 @@ def resolve_strict_bbox_overflows(blocks, page_height):
     flow_blocks = [block for block in ordered if not is_header_footer(block)]
 
     for index, block in enumerate(flow_blocks):
-        if block.get("strict_bbox_fit"):
+        if block.get("strict_bbox_fit") or block.get("preserve_source_line_spacing"):
             continue
         partner = None
         for candidate in flow_blocks[index + 1:]:
@@ -920,23 +986,36 @@ def prepare_blocks(blocks, page_width, page_height):
     reportlab_register_fonts()
     body_size = estimate_page_body_size(blocks, page_height)
     body_font_floor = scaled_body_text_font_floor(page_height)
+    dense_note_font_size = dense_numbered_note_page_font_size(blocks, page_height)
     prepared = []
     for block in blocks:
+        numbered_layout_text = numbered_layout_text_number(block) is not None
+        if numbered_layout_text:
+            # OCR bboxes already encode the item's horizontal placement. The
+            # Markdown renderer must not add another list indent on top of it.
+            block["preserve_numbered_bbox_indent"] = True
+        dense_numbered_note = dense_note_font_size is not None and numbered_layout_text
+        if dense_numbered_note:
+            block["dense_numbered_note"] = True
+            block["preserve_source_line_spacing"] = True
         repair_misclassified_header_footer_block(block, page_width, page_height, body_size)
-        expand_compressed_body_block(block, blocks, page_width, page_height, body_size)
+        if not dense_numbered_note:
+            expand_compressed_body_block(block, blocks, page_width, page_height, body_size)
         block["original_left"] = block["left"]
         block["original_top"] = block["top"]
         block["original_width"] = block["width"]
         block["original_height"] = block["height"]
-        font_size = estimate_font_size(block, body_size)
-        if is_body_text_block(block):
+        font_size = dense_note_font_size if dense_numbered_note else estimate_font_size(block, body_size)
+        if is_body_text_block(block) and not dense_numbered_note:
             font_size = max(font_size, min(body_font_floor, body_size))
             block["enforce_body_font_floor"] = True
             block["body_text_font_floor"] = body_font_floor
         clean_text = clean_block_text(block)
         line_height = estimate_line_height(block, font_size)
         need_height = estimate_required_height(block, font_size, line_height)
-        if block["category"] == "Footnote":
+        if dense_numbered_note:
+            min_font = max(2.6, font_size * 0.64)
+        elif block["category"] == "Footnote":
             min_font = max(4.8, font_size * 0.64)
         elif block["category"] == "Text":
             if block.get("enforce_body_font_floor"):
@@ -1098,6 +1177,9 @@ _COMPONENT_EXPORTS = (
     "is_numeric_page_marker",
     "is_short_running_text",
     "is_body_text_block",
+    "NUMBERED_LAYOUT_TEXT_RE",
+    "numbered_layout_text_number",
+    "dense_numbered_note_page_font_size",
     "is_misclassified_long_header_footer",
     "repair_misclassified_header_footer_block",
     "line_count_for_text",

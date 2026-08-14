@@ -216,22 +216,22 @@ def process_pdf(pdf_path, index, total):
             blocks.sort(key=lambda b: (is_header_footer(b), b["top"], b["left"], b["order"]))
             blocks = prepare_blocks(blocks, page_width, page_height)
 
-            table_blocks = [block for block in blocks if block.get("category") == "Table"]
-            fit_failures = reportlab_page_fit_failures(page_height, table_blocks)
+            blocks, fit_failures = fallback_unfitting_layout_page(
+                pdf_path,
+                page_index,
+                result,
+                blocks,
+                page_width,
+                page_height,
+                work_dir,
+            )
             if fit_failures:
                 first_failure = fit_failures[0]
-                image_dir = work_dir / "layout_image_fallback_pages"
-                image_path = image_dir / f"page_{page_index + 1:04d}.png"
-                render_pdf_page_to_png(pdf_path, page_index, image_path)
-                result["image_fallback_path"] = str(image_path)
-                result["image_fallback_page"] = True
-                result["layout_fit_failures"] = fit_failures
-                append_retry_reason(result, UNFITTING_LAYOUT_IMAGE_FALLBACK_REASON)
-                blocks = [image_fallback_block(image_path, page_width, page_height)]
                 log(
-                    f"        Page {page_index + 1}: used source page image fallback "
+                    f"        Page {page_index + 1}: {len(fit_failures)} OCR block(s) "
+                    "could not fit safely; used source page image fallback "
                     f"because {first_failure.get('category')} block order={first_failure.get('order')} "
-                    "still could not fit after the batched table-off review"
+                    "was still outside its safe bbox limits"
                 )
         for block in blocks:
             block["page_index"] = page_index

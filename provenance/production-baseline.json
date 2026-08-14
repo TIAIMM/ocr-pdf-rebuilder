@@ -1,13 +1,13 @@
 {
   "schema": 2,
-  "captured_at": "2026-08-14T08:47:01.331146+00:00",
+  "captured_at": "2026-08-14T09:52:39.674917+00:00",
   "repository_path": "src/ocr_pdf_rebuilder",
   "package_identity": {
     "schema": 1,
     "algorithm": "sha256-canonical-file-manifest-v1",
     "package": "ocr_pdf_rebuilder",
     "file_count": 25,
-    "files_sha256": "acfd3d30bc2643f45e70ef1ddee2a45ad864525bf09a6ca03723b696142d7895",
+    "files_sha256": "5f99b9e606e9a3fb042ed78059eefd7ce027c65c97e0784b073beea7dfdd3cbe",
     "files": [
       {
         "path": "__init__.py",
@@ -41,8 +41,8 @@
       },
       {
         "path": "layout_engine.py",
-        "size": 39463,
-        "sha256": "efd3bc134c7d058039dadf80100e344e3436d67b2b8283aa54a0034c6af846ff"
+        "size": 42807,
+        "sha256": "243beed5f474ee6ee21ad70dacee0f76b9134d3049f4dfc62b3958eb8d5fa4c5"
       },
       {
         "path": "mineru_pipeline.py",
@@ -61,8 +61,8 @@
       },
       {
         "path": "paddle_pipeline.py",
-        "size": 34996,
-        "sha256": "f5182652aa2eebeca16f86b22de96622fc2a780fe699f6f01284f36e4a7f84ec"
+        "size": 34557,
+        "sha256": "aad7fdaa4212a387df5e1f23c2852d8deadf6f9b2518986f2d9dbb5d662438f8"
       },
       {
         "path": "paddle_textonly_pdf.py",
@@ -76,8 +76,8 @@
       },
       {
         "path": "page_recovery.py",
-        "size": 19656,
-        "sha256": "f925034df44eef13da80d5bc53f0c5d85e97d7360e9d067b1ab40779672228d8"
+        "size": 20558,
+        "sha256": "42bbc6f6c0b962af30ffe86a6d7f8fa4fd4f001f3b0d47530b4d0b29c5380f5e"
       },
       {
         "path": "pdf_validation.py",
@@ -91,8 +91,8 @@
       },
       {
         "path": "pipeline_orchestrator.py",
-        "size": 15242,
-        "sha256": "c647abe988f4c20345e4ffd5f4ef99397dda9ea2d5994da45bde34aa9d02b281"
+        "size": 14834,
+        "sha256": "ba2270c3a720f824addd0ba1e8b1ae3d2e4d12188029b5c7ed67e4ee6ba9e28e"
       },
       {
         "path": "pipeline_runtime.py",
@@ -111,8 +111,8 @@
       },
       {
         "path": "reportlab_renderer.py",
-        "size": 50770,
-        "sha256": "620582bdb183fa240ab3dead6821a868e6c02267b48a7cdfa68caddbb4445d20"
+        "size": 56682,
+        "sha256": "2b124fab96565cdf611d68714907ae62250b4f62f5ddd295e002f123f39c5b7a"
       },
       {
         "path": "runtime_state.py",

@@ -457,6 +457,35 @@ def degrade_unusable_nonblank_pages_to_images(pdf_path, page_results, work_dir):
     return page_results
 
 
+def fallback_unfitting_layout_page(
+    pdf_path,
+    page_index,
+    result,
+    blocks,
+    page_width,
+    page_height,
+    work_dir,
+):
+    """Replace a page only when a prepared OCR block cannot render safely."""
+
+    failures = reportlab_page_fit_failures(page_height, blocks)
+    if not failures:
+        return blocks, []
+
+    image_path = (
+        Path(work_dir)
+        / "layout_image_fallback_pages"
+        / f"page_{page_index + 1:04d}.png"
+    )
+    render_pdf_page_to_png(pdf_path, page_index, image_path)
+    result["image_fallback_path"] = str(image_path)
+    result["image_fallback_page"] = True
+    result["image_fallback_kind"] = "layout_fit"
+    result["layout_fit_failures"] = failures
+    append_retry_reason(result, UNFITTING_LAYOUT_IMAGE_FALLBACK_REASON)
+    return [image_fallback_block(image_path, page_width, page_height)], failures
+
+
 _COMPONENT_EXPORTS = (
     "apply_forward_page_leak_metadata",
     "repair_forward_page_content_leaks",
@@ -466,6 +495,7 @@ _COMPONENT_EXPORTS = (
     "retry_unfitting_table_pages_as_text_batch",
     "degrade_repeated_pseudotext_pages_to_images",
     "degrade_unusable_nonblank_pages_to_images",
+    "fallback_unfitting_layout_page",
 )
 _COMPONENT_RUNTIME = ComponentRuntime(globals(), _COMPONENT_EXPORTS)
 
@@ -476,4 +506,3 @@ def component_exports():
 
 def invoke_component(name, namespace, *args, **kwargs):
     return _COMPONENT_RUNTIME.invoke(name, namespace, *args, **kwargs)
-

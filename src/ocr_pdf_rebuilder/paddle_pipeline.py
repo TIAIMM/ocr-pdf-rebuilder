@@ -691,6 +691,7 @@ def write_paddle_qc_report(
                 "json_path": result.get("json_path"),
                 "retry_reason": result.get("retry_reason"),
                 "cell_count": len(result.get("cells") or []),
+                "bbox_content_repairs": result.get("paddle_bbox_content_repairs") or [],
             }
             for page, result in sorted(page_results.items())
         },
@@ -752,11 +753,8 @@ def build_outputs(
                     )
                 )
                 blocks = shared.prepare_blocks(blocks, page_width, page_height)
-                table_blocks = [
-                    block for block in blocks if block.get("category") == "Table"
-                ]
                 failures = shared.reportlab_page_fit_failures(
-                    page_height, table_blocks
+                    page_height, blocks
                 )
                 if failures:
                     image_path = work_dir / "layout_image_fallback_pages" / f"page_{page_index + 1:04d}.png"
@@ -768,6 +766,10 @@ def build_outputs(
                         result, shared.UNFITTING_LAYOUT_IMAGE_FALLBACK_REASON
                     )
                     blocks = [shared.image_fallback_block(image_path, page_width, page_height)]
+                    log(
+                        f"        Page {page_index + 1}: {len(failures)} OCR block(s) "
+                        "could not fit safely; used source page image fallback"
+                    )
             for block in blocks:
                 block["page_index"] = page_index
                 block["source_pdf_path"] = str(pdf_path)

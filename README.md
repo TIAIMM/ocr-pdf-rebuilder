@@ -56,10 +56,11 @@ components have no dependency back to either CLI entry point:
 - `qc_reporting.py`: suspect-page analysis, debug artifacts and QC reports;
 - `pipeline_orchestrator.py`: one-document production flow and workspace
   lifecycle;
-- `paddle_worker.py`: dedicated-environment PaddleOCR-VL model process and
-  normalized per-page JSON checkpoints;
-- `paddle_pipeline.py`: Paddle runtime identity, retries, recovery and output
-  orchestration on top of the shared renderer;
+- `paddle_worker.py`: dedicated-environment PaddleOCR-VL model process,
+  normalized per-page JSON checkpoints and conservative repair of a short
+  reference marker whose long body text was assigned to an adjacent empty box;
+- `paddle_pipeline.py`: Paddle runtime identity, retries, recovery, all-text-block
+  fit preflight and safe page fallback on top of the shared renderer;
 - `batch_runner.py`: multi-file iteration, failure isolation and atomic batch
   summary updates;
 - `forward_page_leak.py`: source-page overlap detection and isolated-retry

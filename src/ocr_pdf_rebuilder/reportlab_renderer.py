@@ -148,7 +148,15 @@ def split_reportlab_font_runs(segments):
     result = []
 
     for seg in segments:
-        text = seg.get("text", "")
+        style = seg.get("style", "normal")
+        # OCR/LaTeX normalization can introduce a different Unicode character
+        # from the source spelling (for example F^-1 -> F⁻¹). Normalize before
+        # assigning font runs so every final glyph is checked against the font
+        # that will actually draw it.
+        text = normalize_draw_segment_text(
+            text=seg.get("text", ""),
+            strip_markdown=style != "code",
+        )
         if not text:
             continue
 
@@ -1042,6 +1050,11 @@ def reportlab_table_fits(page_height, rect, block_or_text, fontsize, line_height
 def reportlab_block_fit_failure(page_height, block):
     if block.get("category") == "ImageFallback":
         return None
+    # Formula blocks take a separate vector/unicode/image-crop path before the
+    # ordinary textbox fitting branch.  A text-only dry run would reject valid
+    # formulas prematurely, so their final renderer remains authoritative.
+    if is_formula_render_block(block):
+        return None
 
     text = normalize_markdown_text(block.get("text", ""))
     if not text:
@@ -1296,4 +1309,3 @@ def component_exports():
 
 def invoke_component(name, namespace, *args, **kwargs):
     return _COMPONENT_RUNTIME.invoke(name, namespace, *args, **kwargs)
-

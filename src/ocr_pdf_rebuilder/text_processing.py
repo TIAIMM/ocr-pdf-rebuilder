@@ -676,9 +676,24 @@ def latex_scripts_to_unicode(text):
             return match.group(0)
         return base + translated
 
+    def replace_unbraced_number(match):
+        base = match.group(1)
+        marker = match.group(2)
+        value = re.sub(r"\s+", "", match.group(3))
+        mapping = SUPERSCRIPT_MAP if marker == "^" else SUBSCRIPT_MAP
+        translated = translate_script_text(value, mapping)
+        if translated is None:
+            return match.group(0)
+        return base + translated
+
     text = re.sub(
         r"([A-Za-zΑ-ω0-9\)\]])\s*([\^_])\s*\{\s*([^{}\n]{1,12})\s*\}",
         replace_braced,
+        text,
+    )
+    text = re.sub(
+        r"([A-Za-zΑ-ω0-9\)\]])\s*([\^_])\s*([+\-]?[0-9]{1,12})",
+        replace_unbraced_number,
         text,
     )
     text = re.sub(
@@ -978,6 +993,11 @@ def linearize_latex_formula(text):
     text = re.sub(r"\\(?:mathrm|mathbf|mathit|mathsf|text|operatorname)\s*\{\s*([^{}]{1,160})\s*\}", r"\1", text)
     text = re.sub(r"\\[A-Za-z]+\*?", "", text)
     text = text.replace("{", "").replace("}", "")
+    # A script can become adjacent to its base only after the surrounding
+    # braces have been removed (for example S_{F}^{-1} -> S_F^-1). Run the
+    # conversion once more so signed numeric scripts are rendered as real
+    # Unicode superscripts instead of leaking raw markup into font routing.
+    text = latex_scripts_to_unicode(text)
     text = text.replace("$", "")
     text = text.replace("~", " ")
     text = re.sub(r"[ \t\r\f\v]+", " ", text)
@@ -1060,7 +1080,11 @@ def formula_to_unicode_if_simple(text):
     simplified = linearize_latex_formula(source)
     if not simplified:
         return None
-    if re.search(r"[\\{}]", simplified):
+    # Residual script markers mean the Unicode conversion was not lossless
+    # (for example an uppercase subscript such as S_{F}). Let the vector
+    # formula renderer preserve the notation instead of feeding those markers
+    # to the Markdown inline parser.
+    if re.search(r"[\\{}_^]", simplified):
         return None
     if len(simplified) > 110:
         return None
@@ -1194,17 +1218,24 @@ def reportlab_draw_hidden_plain_text(c, page_height, rect, text, fontsize=2.0):
     fontsize = max(1.0, min(float(fontsize), max(1.0, rect.height * 0.45)))
     baseline = page_height - rect.y0 - fontsize
     cursor = rect.x0
-    for seg in reportlab_plain_segments(text):
-        seg_text = seg.get("text", "")
-        if not seg_text:
-            continue
-        fontname, _fake_bold = reportlab_font_for_segment(seg, "normal")
-        text_obj = c.beginText(cursor, baseline)
-        text_obj.setFont(fontname, fontsize)
-        text_obj.setTextRenderMode(3)
-        text_obj.textOut(text_for_single_pdf_draw(seg_text))
-        c.drawText(text_obj)
-        cursor += reportlab_text_width(seg_text, fontname, fontsize)
+    # PDF text rendering mode persists across text objects. Isolate mode 3
+    # (invisible text) so formula search text cannot make a following equation
+    # number, footer, or page number invisible.
+    c.saveState()
+    try:
+        for seg in reportlab_plain_segments(text):
+            seg_text = seg.get("text", "")
+            if not seg_text:
+                continue
+            fontname, _fake_bold = reportlab_font_for_segment(seg, "normal")
+            text_obj = c.beginText(cursor, baseline)
+            text_obj.setFont(fontname, fontsize)
+            text_obj.setTextRenderMode(3)
+            text_obj.textOut(text_for_single_pdf_draw(seg_text))
+            c.drawText(text_obj)
+            cursor += reportlab_text_width(seg_text, fontname, fontsize)
+    finally:
+        c.restoreState()
 
 
 def render_pdf_rect_to_png(pdf_path, page_index, rect, image_path, padding=FORMULA_CROP_PADDING, dpi=FORMULA_RENDER_DPI):
@@ -1632,4 +1663,3 @@ def component_exports():
 
 def invoke_component(name, namespace, *args, **kwargs):
     return _COMPONENT_RUNTIME.invoke(name, namespace, *args, **kwargs)
-

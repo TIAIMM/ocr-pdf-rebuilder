@@ -54,6 +54,8 @@ def collect_qc_suspect_pages(pdf_path, page_results, page_specs, page_count):
                 issues.append("image_fallback_page")
             if result.get("layout_fit_failures"):
                 issues.append("layout_block_could_not_fit_bbox")
+            if result.get("paddle_bbox_content_repaired"):
+                issues.append("paddle_bbox_content_repaired")
             if result.get("table_disabled_retry"):
                 issues.append("table_recognition_disabled_page_retry")
             if result.get("blank_page"):
@@ -293,4 +295,3 @@ def component_exports():
 
 def invoke_component(name, namespace, *args, **kwargs):
     return _COMPONENT_RUNTIME.invoke(name, namespace, *args, **kwargs)
-

@@ -118,6 +118,73 @@ class PaddlePipelineTests(unittest.TestCase):
         self.assertEqual(result["image_size"], [1000, 1400])
         self.assertTrue(all(cell["__bbox_units"] == "image" for cell in result["cells"]))
 
+    def test_marker_body_text_is_reassigned_to_adjacent_empty_layout_bbox(self):
+        quotation = (
+            "我们不能想象在时间中的传播，除非要么作为物质实体通过空间的漂移，"
+            "要么作为运动状态或已存在于空间中的介质中的应力的传播。"
+        )
+        raw = {
+            "parsing_res_list": [
+                {
+                    "block_id": 3,
+                    "block_order": 4,
+                    "block_label": "text",
+                    "block_content": f"[35]\n{quotation}",
+                    "block_bbox": [31, 665, 54, 678],
+                },
+                {
+                    "block_id": 4,
+                    "block_order": 5,
+                    "block_label": "text",
+                    "block_content": "",
+                    "block_bbox": [93, 663, 488, 738],
+                },
+            ]
+        }
+        result = paddle_worker.normalized_page_result(
+            raw,
+            page_index=102,
+            image_width=562,
+            image_height=917,
+            raw_json_path=Path("page_0103_res.json"),
+        )
+
+        self.assertTrue(result["paddle_bbox_content_repaired"])
+        self.assertEqual(len(result["paddle_bbox_content_repairs"]), 1)
+        self.assertEqual([cell["text"] for cell in result["cells"]], ["[35]", quotation])
+        self.assertEqual(result["cells"][0]["bbox"], [31.0, 665.0, 54.0, 678.0])
+        self.assertEqual(result["cells"][1]["bbox"], [93.0, 663.0, 488.0, 738.0])
+        self.assertEqual(
+            [cell["__paddle_bbox_content_repair_role"] for cell in result["cells"]],
+            ["marker", "body"],
+        )
+
+    def test_marker_body_text_is_not_guessed_without_an_empty_sibling(self):
+        raw = {
+            "parsing_res_list": [
+                {
+                    "block_label": "text",
+                    "block_content": "[35]\n正文内容足够长，但没有可验证的空白正文布局框，因此必须保留原结果。",
+                    "block_bbox": [31, 665, 54, 678],
+                },
+                {
+                    "block_label": "text",
+                    "block_content": "已经占用的相邻文字块",
+                    "block_bbox": [93, 663, 488, 738],
+                },
+            ]
+        }
+        result = paddle_worker.normalized_page_result(
+            raw,
+            page_index=0,
+            image_width=562,
+            image_height=917,
+            raw_json_path=Path("raw.json"),
+        )
+        self.assertFalse(result["paddle_bbox_content_repaired"])
+        self.assertEqual(len(result["cells"]), 2)
+        self.assertTrue(result["cells"][0]["text"].startswith("[35]"))
+
     def test_worker_command_uses_dedicated_paddle_environment_and_page_numbers(self):
         command = paddle_pipeline.worker_command(
             Path("book.pdf"),
@@ -239,6 +306,121 @@ class PaddlePipelineTests(unittest.TestCase):
                 self.assertIn("Paddle shared renderer", output[0].get_text())
                 self.assertEqual(output[1].get_text().strip(), "")
                 self.assertFalse(output[0].get_images(full=True))
+
+    def test_formula_signed_superscript_does_not_emit_null_character(self):
+        formula = (
+            r"$$ k_{\mu}\Gamma_{\mu}(q,p)=S_{F}^{-1}(q)"
+            r"-S_{F}^{-1}(p),k=q-p, $$"
+        )
+        self.assertIsNone(paddle_pipeline.shared.formula_to_unicode_if_simple(formula))
+        self.assertEqual(
+            paddle_pipeline.shared.normalize_draw_segment_text("F^-1"),
+            "F⁻¹",
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.pdf"
+            with fitz.open() as document:
+                document.new_page(width=300, height=400)
+                document.save(source)
+            result = {
+                "cells": [
+                    {
+                        "bbox": [40, 180, 260, 220],
+                        "category": "Formula",
+                        "text": formula,
+                        "__bbox_units": "pdf",
+                    },
+                    {
+                        "bbox": [40, 300, 260, 330],
+                        "category": "Page-footer",
+                        "text": "VISIBLE FOOTER 448",
+                        "__bbox_units": "pdf",
+                    },
+                ],
+                "fallback_text": "",
+                "filtered": False,
+                "needs_retry": False,
+                "image_size": None,
+                "md_nohf_text": formula,
+            }
+            output_pdf = root / "output.pdf"
+            output_images = root / "output_with_images.pdf"
+            output_md = root / "output.md"
+            with mock.patch.object(paddle_pipeline, "write_paddle_qc_report"):
+                fallback_pages = paddle_pipeline.build_outputs(
+                    source,
+                    {0: result},
+                    root / "work",
+                    root / "raw",
+                    output_pdf,
+                    output_images,
+                    output_md,
+                )
+
+            self.assertEqual(fallback_pages, [])
+            with fitz.open(output_pdf) as output:
+                page = output[0]
+                extracted = page.get_text()
+                self.assertNotIn("\x00", extracted)
+                self.assertIn("F⁻¹", extracted)
+                self.assertIn("VISIBLE FOOTER 448", extracted)
+                self.assertFalse(page.get_images(full=True))
+                footer = page.get_pixmap(
+                    matrix=fitz.Matrix(2, 2),
+                    clip=fitz.Rect(40, 300, 260, 330),
+                    colorspace=fitz.csGRAY,
+                    alpha=False,
+                )
+                self.assertLess(min(footer.samples), 200)
+
+    def test_unfitting_non_table_text_uses_safe_page_fallback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.pdf"
+            with fitz.open() as document:
+                document.new_page(width=300, height=400)
+                document.save(source)
+            result = {
+                "cells": [
+                    {
+                        "bbox": [10, 200, 20, 205],
+                        "category": "Text",
+                        "text": "This long OCR paragraph cannot fit in a ten point wide box.",
+                        "__bbox_units": "pdf",
+                    }
+                ],
+                "fallback_text": "",
+                "filtered": False,
+                "needs_retry": False,
+                "image_size": None,
+                "md_nohf_text": "This long OCR paragraph cannot fit in a ten point wide box.",
+            }
+            output_pdf = root / "output.pdf"
+            output_images = root / "output_with_images.pdf"
+            output_md = root / "output.md"
+            with mock.patch.object(paddle_pipeline, "write_paddle_qc_report"):
+                fallback_pages = paddle_pipeline.build_outputs(
+                    source,
+                    {0: result},
+                    root / "work",
+                    root / "raw",
+                    output_pdf,
+                    output_images,
+                    output_md,
+                )
+
+            self.assertEqual(fallback_pages, [0])
+            self.assertTrue(result["image_fallback_page"])
+            self.assertTrue(result["layout_fit_failures"])
+            with fitz.open(output_pdf) as output:
+                self.assertEqual(output.page_count, 1)
+                self.assertEqual(output[0].get_text().strip(), "")
+                self.assertFalse(output[0].get_images(full=True))
+            with fitz.open(output_images) as output_images_document:
+                self.assertEqual(output_images_document.page_count, 1)
+                self.assertTrue(output_images_document[0].get_images(full=True))
 
 
 if __name__ == "__main__":

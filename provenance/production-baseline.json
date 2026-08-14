@@ -1,13 +1,13 @@
 {
   "schema": 2,
-  "captured_at": "2026-08-12T14:00:37.763522+00:00",
+  "captured_at": "2026-08-14T07:43:10.847786+00:00",
   "repository_path": "src/ocr_pdf_rebuilder",
   "package_identity": {
     "schema": 1,
     "algorithm": "sha256-canonical-file-manifest-v1",
     "package": "ocr_pdf_rebuilder",
     "file_count": 25,
-    "files_sha256": "25be57fd8ce4957f4c31683b61c2e9c226e4dafb7f4de93b1325caa3e249a2d2",
+    "files_sha256": "c460759d7789c54656e64fd440bdff76fa58285cf5535b3a81cefa86b7bf029f",
     "files": [
       {
         "path": "__init__.py",
@@ -61,8 +61,8 @@
       },
       {
         "path": "paddle_pipeline.py",
-        "size": 34100,
-        "sha256": "ef1491017aae58d8361fc26fcab819cb9b7d70f8034479988f62c23abcce1639"
+        "size": 34265,
+        "sha256": "cbc3ce7331ac90d61b408f419b17615809c7aab821bc75c2f60290d21bd772f1"
       },
       {
         "path": "paddle_textonly_pdf.py",
@@ -71,8 +71,8 @@
       },
       {
         "path": "paddle_worker.py",
-        "size": 10900,
-        "sha256": "ffb7dd108bca3763361e3085410aa52a2693a54a7bbb28c3e1cd31795618d1b4"
+        "size": 16504,
+        "sha256": "9f9f4a255eb1fc5b00a473a3fe27333de5bf0d250a2cf029f8b1134b23dfd520"
       },
       {
         "path": "page_recovery.py",
@@ -106,13 +106,13 @@
       },
       {
         "path": "qc_reporting.py",
-        "size": 12194,
-        "sha256": "1702166e1306c82769d4c82cab1f84b2624df75b9ddb1d9186074db27af50f44"
+        "size": 12314,
+        "sha256": "b82e6a820d1d3fa3c282ad05f53c791a1d17b9e2b0bb7a3c6a900772edbaa837"
       },
       {
         "path": "reportlab_renderer.py",
-        "size": 46412,
-        "sha256": "0c5fedcf74ae0b01952ef5ec4cc23bb59d91a65a9169486c15bee426da6d2eab"
+        "size": 47124,
+        "sha256": "29db971235cdcd4a9338962086a5767bad708bddd36f525c9132dd982402d739"
       },
       {
         "path": "runtime_state.py",
@@ -131,8 +131,8 @@
       },
       {
         "path": "text_processing.py",
-        "size": 52841,
-        "sha256": "a85578b1826a4b83e8d8c0380fbb892593fcee8a22f3ed664b09c69d637f487a"
+        "size": 54277,
+        "sha256": "b5a41c835cbd835e72dd450cd463049b9817022f2944ac0fed3699da2d0e4cdd"
       }
     ]
   }

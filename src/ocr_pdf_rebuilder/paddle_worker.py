@@ -12,12 +12,14 @@ import importlib.metadata
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 
 import fitz
 
 
 SCHEMA = 1
+SHORT_REFERENCE_MARKER_RE = re.compile(r"\[(?:\d{1,4}|[A-Za-z]{1,4})\]")
 LABEL_CATEGORIES = {
     "title": "Title",
     "doc_title": "Title",
@@ -83,6 +85,130 @@ def category_for_label(label: object) -> str:
     return LABEL_CATEGORIES.get(normalized, "Text")
 
 
+def _normalized_block_bbox(block: object) -> list[float] | None:
+    if not isinstance(block, dict):
+        return None
+    bbox = block.get("block_bbox")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        return None
+    try:
+        normalized = [float(value) for value in bbox]
+    except (TypeError, ValueError):
+        return None
+    if normalized[2] <= normalized[0] or normalized[3] <= normalized[1]:
+        return None
+    return normalized
+
+
+def repair_marker_body_bbox_mismatches(
+    raw_blocks: object,
+    image_width: int,
+    image_height: int,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Split marker/body text when Paddle assigns both to the marker's tiny bbox.
+
+    PaddleOCR-VL can return a low-area reference marker block containing the
+    marker plus a long quotation while leaving the adjacent, correctly sized
+    text block empty.  Repair only that strongly constrained geometry; all
+    ambiguous cases remain untouched for the renderer's safe fallback.
+    """
+
+    if not isinstance(raw_blocks, (list, tuple)):
+        return [], []
+    blocks = [dict(block) for block in raw_blocks if isinstance(block, dict)]
+    repairs: list[dict[str, object]] = []
+    used_empty_blocks: set[int] = set()
+
+    max_marker_width = max(32.0, float(image_width) * 0.12)
+    max_marker_height = max(24.0, float(image_height) * 0.04)
+    max_horizontal_gap = max(36.0, float(image_width) * 0.15)
+    min_body_width = max(120.0, float(image_width) * 0.25)
+    min_body_height = max(30.0, float(image_height) * 0.04)
+
+    for marker_index, marker_block in enumerate(blocks):
+        content = str(marker_block.get("block_content") or "").strip()
+        lines = content.splitlines()
+        if len(lines) < 2:
+            continue
+        marker_text = lines[0].strip()
+        body_text = "\n".join(lines[1:]).strip()
+        if not SHORT_REFERENCE_MARKER_RE.fullmatch(marker_text) or len(body_text) < 20:
+            continue
+
+        marker_bbox = _normalized_block_bbox(marker_block)
+        if marker_bbox is None:
+            continue
+        marker_width = marker_bbox[2] - marker_bbox[0]
+        marker_height = marker_bbox[3] - marker_bbox[1]
+        if marker_width > max_marker_width or marker_height > max_marker_height:
+            continue
+
+        marker_label = str(marker_block.get("block_label") or "text").strip().lower()
+        candidates: list[tuple[tuple[float, ...], int, list[float]]] = []
+        for body_index, body_block in enumerate(blocks):
+            if body_index == marker_index or body_index in used_empty_blocks:
+                continue
+            if abs(body_index - marker_index) > 3:
+                continue
+            if str(body_block.get("block_content") or "").strip():
+                continue
+            body_label = str(body_block.get("block_label") or "text").strip().lower()
+            if body_label != marker_label:
+                continue
+            body_bbox = _normalized_block_bbox(body_block)
+            if body_bbox is None:
+                continue
+            body_width = body_bbox[2] - body_bbox[0]
+            body_height = body_bbox[3] - body_bbox[1]
+            if body_width < min_body_width or body_height < min_body_height:
+                continue
+            overlap = max(
+                0.0,
+                min(marker_bbox[3], body_bbox[3])
+                - max(marker_bbox[1], body_bbox[1]),
+            )
+            if overlap / max(marker_height, 1.0) < 0.50:
+                continue
+            if body_bbox[0] < marker_bbox[0]:
+                continue
+            horizontal_gap = max(0.0, body_bbox[0] - marker_bbox[2])
+            if horizontal_gap > max_horizontal_gap:
+                continue
+            body_area = body_width * body_height
+            marker_area = marker_width * marker_height
+            if body_area < marker_area * 8.0:
+                continue
+            score = (
+                float(abs(body_index - marker_index)),
+                horizontal_gap,
+                -overlap,
+                -body_area,
+            )
+            candidates.append((score, body_index, body_bbox))
+
+        if not candidates:
+            continue
+        _score, body_index, body_bbox = min(candidates, key=lambda item: item[0])
+        body_block = blocks[body_index]
+        repair = {
+            "kind": "marker_body_to_empty_sibling",
+            "marker_block_id": marker_block.get("block_id"),
+            "body_block_id": body_block.get("block_id"),
+            "marker_bbox": marker_bbox,
+            "body_bbox": body_bbox,
+        }
+        marker_block["block_content"] = marker_text
+        marker_block["__paddle_bbox_content_repaired"] = True
+        marker_block["__paddle_bbox_content_repair_role"] = "marker"
+        body_block["block_content"] = body_text
+        body_block["__paddle_bbox_content_repaired"] = True
+        body_block["__paddle_bbox_content_repair_role"] = "body"
+        used_empty_blocks.add(body_index)
+        repairs.append(repair)
+
+    return blocks, repairs
+
+
 def normalized_page_result(
     data: dict[str, object],
     *,
@@ -94,7 +220,11 @@ def normalized_page_result(
     result = data.get("res", data)
     if not isinstance(result, dict):
         result = {}
-    raw_blocks = result.get("parsing_res_list") or []
+    raw_blocks, bbox_content_repairs = repair_marker_body_bbox_mismatches(
+        result.get("parsing_res_list") or [],
+        image_width,
+        image_height,
+    )
     cells = []
     for source_order, block in enumerate(raw_blocks):
         if not isinstance(block, dict):
@@ -115,17 +245,21 @@ def normalized_page_result(
             order = int(order_value) if order_value is not None else source_order
         except (TypeError, ValueError):
             order = source_order
-        cells.append(
-            {
-                "bbox": normalized_bbox,
-                "category": category,
-                "text": content,
-                "content": content,
-                "__bbox_units": "image",
-                "__paddle_label": str(block.get("block_label") or "text"),
-                "__paddle_order": order,
-            }
-        )
+        cell = {
+            "bbox": normalized_bbox,
+            "category": category,
+            "text": content,
+            "content": content,
+            "__bbox_units": "image",
+            "__paddle_label": str(block.get("block_label") or "text"),
+            "__paddle_order": order,
+        }
+        if block.get("__paddle_bbox_content_repaired"):
+            cell["__paddle_bbox_content_repaired"] = True
+            cell["__paddle_bbox_content_repair_role"] = block.get(
+                "__paddle_bbox_content_repair_role"
+            )
+        cells.append(cell)
     cells.sort(
         key=lambda cell: (
             int(cell.get("__paddle_order", 0)),
@@ -143,6 +277,8 @@ def normalized_page_result(
         "filtered": False,
         "needs_retry": False,
         "retry_reason": "",
+        "paddle_bbox_content_repaired": bool(bbox_content_repairs),
+        "paddle_bbox_content_repairs": bbox_content_repairs,
         "image_size": [image_width, image_height],
         "json_path": str(raw_json_path),
         "image_path": None,

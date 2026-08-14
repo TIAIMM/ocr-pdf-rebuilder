@@ -260,8 +260,16 @@ def process_pdf(pdf_path, index, total):
         formula_work_dir=work_dir / "formula_render_cache",
         include_full_page_images=False,
         allow_formula_image_fallback=False,
+        progress_callback=lambda current, total: log(
+            f"        Render text PDF page {current}/{total}"
+        ),
     )
-    output_validation_scan = scan_pdf_validation(output_pdf)
+    output_validation_scan = scan_pdf_validation(
+        output_pdf,
+        progress_callback=lambda current, total: log(
+            f"        Validate text PDF page {current}/{total}"
+        ),
+    )
     validate_pdf_page_count(output_pdf, page_count, output_validation_scan)
     validate_pdf_has_no_raster_images(output_pdf, output_validation_scan)
     validate_pdf_pages_are_blank(output_pdf, image_fallback_pages, output_validation_scan)
@@ -285,8 +293,16 @@ def process_pdf(pdf_path, index, total):
             formula_work_dir=work_dir / "formula_render_cache",
             include_full_page_images=True,
             allow_formula_image_fallback=True,
+            progress_callback=lambda current, total: log(
+                f"        Render image PDF page {current}/{total}"
+            ),
         )
-        output_image_validation_scan = scan_pdf_validation(output_image_pdf)
+        output_image_validation_scan = scan_pdf_validation(
+            output_image_pdf,
+            progress_callback=lambda current, total: log(
+                f"        Validate image PDF page {current}/{total}"
+            ),
+        )
         validate_pdf_page_count(output_image_pdf, page_count, output_image_validation_scan)
         validate_pdf_has_images_on_pages(
             output_image_pdf,

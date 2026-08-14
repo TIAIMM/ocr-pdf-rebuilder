@@ -162,6 +162,43 @@ class GuiControllerTests(unittest.TestCase):
         self.assertEqual(progress["page_current"], 4)
         self.assertEqual(progress["percent"], 26.0)
 
+    def test_tracks_stage_four_render_and_validation_page_progress(self):
+        (self.input_dir / "sample.pdf").write_bytes(b"fixture")
+        controller = self.controller([sys.executable, "-c", "pass"])
+        with controller._lock:
+            controller._reset_file_progress(controller.list_inputs())
+            controller._consume_progress_text(
+                "[1/1] Start: sample.pdf\n"
+                "    Pages:  200\n"
+                "    [4/5] Rendering text-only PDF with ReportLab\n"
+                "        Render text PDF page 50/200\n"
+            )
+        progress = controller.status()["file_progress"][0]
+        self.assertEqual(progress["stage"], "渲染纯文字 PDF")
+        self.assertEqual(progress["page_current"], 50)
+        self.assertEqual(progress["page_total"], 200)
+        self.assertEqual(progress["percent"], 86.2)
+
+        with controller._lock:
+            controller._consume_progress_text(
+                "        Validate text PDF page 100/200\n"
+            )
+        progress = controller.status()["file_progress"][0]
+        self.assertEqual(progress["stage"], "验证纯文字 PDF")
+        self.assertEqual(progress["page_current"], 100)
+        self.assertEqual(progress["percent"], 91.5)
+
+        with controller._lock:
+            controller._consume_progress_text(
+                "    Rendering image-variant PDF for 2 fallback page(s): output.pdf\n"
+                "        Render image PDF page 100/200\n"
+                "        Validate image PDF page 50/200\n"
+            )
+        progress = controller.status()["file_progress"][0]
+        self.assertEqual(progress["stage"], "验证带图片 PDF")
+        self.assertEqual(progress["page_current"], 50)
+        self.assertEqual(progress["percent"], 95.8)
+
     def test_lists_outputs_and_reads_summary(self):
         output = self.output_dir / "结果 文件.pdf"
         output.write_bytes(b"pdf")

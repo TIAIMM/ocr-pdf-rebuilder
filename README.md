@@ -52,7 +52,8 @@ components have no dependency back to either CLI entry point:
   or source-text fallbacks;
 - `layout_engine.py`: cell-to-block conversion, fitting, reflow and Markdown
   reconstruction;
-- `reportlab_renderer.py`: font selection, measurement and PDF drawing;
+- `reportlab_renderer.py`: font selection, measurement, registered-glyph
+  coverage checks, visible missing-glyph fallback and PDF drawing;
 - `qc_reporting.py`: suspect-page analysis, debug artifacts and QC reports;
 - `pipeline_orchestrator.py`: one-document production flow and workspace
   lifecycle;
@@ -202,8 +203,10 @@ GUI lists PDFs from `input/`, lets the operator select MinerU or PaddleOCR-VL,
 starts the selected repository batch, streams its console output, requests safe
 process-group cleanup when stopped, displays `batch_summary.json`, and offers generated PDFs
 for download. Per-file progress shows the active stage, weighted total percent,
-and current/total page count. It binds to localhost by default and has no upload
-or delete operation.
+and current/total page count. Stage 4 reports every page while rendering and
+validating both the text-only artifact and any image variant, so a long final
+build no longer appears stalled. It binds to localhost by default and has no
+upload or delete operation.
 
 ## License status
 

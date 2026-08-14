@@ -100,6 +100,19 @@ CJK_LIKE_RE = re.compile(
 )
 
 FONT_COVERAGE_CACHE = {}
+REPORTLAB_REGISTERED_FONT_NAMES = (
+    "SourceHanSerifCN-Regular",
+    "SourceHanSerifCN-Medium",
+    "SourceHanSerifCN-Bold",
+    "Latin-Regular",
+    "Latin-Bold",
+    "Latin-Italic",
+    "Greek-Regular",
+    "Greek-Bold",
+    "Greek-Italic",
+    "Mono",
+)
+REPORTLAB_MISSING_GLYPH_REPLACEMENT = "□"
 
 
 def font_supports_char(fontname, ch):
@@ -114,6 +127,34 @@ def font_supports_char(fontname, ch):
     return ord(ch) in FONT_COVERAGE_CACHE[fontname]
 
 
+def font_supports_text(fontname, text):
+    return all(ch.isspace() or font_supports_char(fontname, ch) for ch in str(text or ""))
+
+
+@lru_cache(maxsize=65536)
+def reportlab_char_has_registered_glyph(ch):
+    if not ch or ch.isspace():
+        return True
+    return any(font_supports_char(fontname, ch) for fontname in REPORTLAB_REGISTERED_FONT_NAMES)
+
+
+def reportlab_unsupported_chars(text):
+    return sorted(
+        {ch for ch in str(text or "") if not reportlab_char_has_registered_glyph(ch)},
+        key=ord,
+    )
+
+
+def reportlab_safe_text(text):
+    text = str(text or "")
+    if not text:
+        return ""
+    return "".join(
+        ch if reportlab_char_has_registered_glyph(ch) else REPORTLAB_MISSING_GLYPH_REPLACEMENT
+        for ch in text
+    )
+
+
 def serif_script_for_char(ch):
     # SourceSerif is the primary unified serif family for Latin, Greek, and Cyrillic.
     # DejaVu Serif is used only as a glyph-safety fallback to avoid U+0000 extraction.
@@ -121,7 +162,22 @@ def serif_script_for_char(ch):
         return "latin"
     if font_supports_char("Greek-Regular", ch):
         return "serif-fallback"
-    return "latin"
+    if font_supports_char("Mono", ch):
+        return "mono-fallback"
+    if font_supports_char("SourceHanSerifCN-Regular", ch):
+        return "cjk"
+    return "missing"
+
+
+def script_supports_char(script, ch):
+    fontname = {
+        "latin": "Latin-Regular",
+        "serif-fallback": "Greek-Regular",
+        "greek": "Greek-Regular",
+        "mono-fallback": "Mono",
+        "cjk": "SourceHanSerifCN-Regular",
+    }.get(script)
+    return bool(fontname and font_supports_char(fontname, ch))
 
 
 def char_script(ch):
@@ -131,7 +187,7 @@ def char_script(ch):
         return "serif-fallback"
     if LATIN_LIKE_RE.match(ch) or GREEK_LIKE_RE.match(ch) or CYRILLIC_LIKE_RE.match(ch):
         return serif_script_for_char(ch)
-    if CJK_LIKE_RE.match(ch):
+    if CJK_LIKE_RE.match(ch) and font_supports_char("SourceHanSerifCN-Regular", ch):
         return "cjk"
     if ch.isspace():
         return "neutral"
@@ -141,7 +197,11 @@ def char_script(ch):
         return "latin"
     if font_supports_char("Greek-Regular", ch):
         return "serif-fallback"
-    return "cjk"
+    if font_supports_char("Mono", ch):
+        return "mono-fallback"
+    if font_supports_char("SourceHanSerifCN-Regular", ch):
+        return "cjk"
+    return "missing"
 
 
 def split_reportlab_font_runs(segments):
@@ -157,6 +217,7 @@ def split_reportlab_font_runs(segments):
             text=seg.get("text", ""),
             strip_markdown=style != "code",
         )
+        text = reportlab_safe_text(text)
         if not text:
             continue
 
@@ -167,7 +228,10 @@ def split_reportlab_font_runs(segments):
             script = char_script(ch)
 
             if script == "combining":
-                script = current_script or "latin"
+                if current_script and script_supports_char(current_script, ch):
+                    script = current_script
+                else:
+                    script = serif_script_for_char(ch)
 
             if script == "neutral":
                 script = current_script or "cjk"
@@ -196,38 +260,55 @@ def reportlab_font_for_segment(seg, line_style):
     style = seg.get("style", "normal")
     script = seg.get("script", "cjk")
 
-    if script == "latin":
+    if script == "mono-fallback":
+        fontname = "Mono"
+    elif script == "latin":
         if style == "code":
-            return "Mono", False
-        if style == "math":
-            return "Latin-Italic", False
-        if style in {"strong", "strongitalic"} or line_is_bold(line_style):
-            return "Latin-Bold", False
-        if style == "italic" or line_is_italic(line_style):
-            return "Latin-Italic", False
-        return "Latin-Regular", False
-
-    if script in {"greek", "serif-fallback"}:
+            fontname = "Mono"
+        elif style == "math":
+            fontname = "Latin-Italic"
+        elif style in {"strong", "strongitalic"} or line_is_bold(line_style):
+            fontname = "Latin-Bold"
+        elif style == "italic" or line_is_italic(line_style):
+            fontname = "Latin-Italic"
+        else:
+            fontname = "Latin-Regular"
+    elif script in {"greek", "serif-fallback"}:
         if style == "code":
-            return "Greek-Regular", False
-        if style == "math":
-            return "Greek-Italic", False
-        if style in {"strong", "strongitalic"} or line_is_bold(line_style):
-            return "Greek-Bold", False
-        if style == "italic" or line_is_italic(line_style):
-            return "Greek-Italic", False
-        return "Greek-Regular", False
+            fontname = "Greek-Regular"
+        elif style == "math":
+            fontname = "Greek-Italic"
+        elif style in {"strong", "strongitalic"} or line_is_bold(line_style):
+            fontname = "Greek-Bold"
+        elif style == "italic" or line_is_italic(line_style):
+            fontname = "Greek-Italic"
+        else:
+            fontname = "Greek-Regular"
+    elif style in {"strong", "strongitalic"} or line_style in {"strong", "heading1", "heading2"}:
+        fontname = "SourceHanSerifCN-Bold"
+    elif line_style in {"heading3", "heading4", "heading5", "heading6"}:
+        fontname = "SourceHanSerifCN-Medium"
+    else:
+        fontname = "SourceHanSerifCN-Regular"
 
-    if style in {"strong", "strongitalic"} or line_style in {"strong", "heading1", "heading2"}:
-        return "SourceHanSerifCN-Bold", False
+    text = seg.get("text", "")
+    if font_supports_text(fontname, text):
+        return fontname, False
 
-    if line_style in {"heading3", "heading4", "heading5", "heading6"}:
-        return "SourceHanSerifCN-Medium", False
-
-    if style == "code":
-        return "SourceHanSerifCN-Regular", False
-
-    return "SourceHanSerifCN-Regular", False
+    italic = style in {"math", "italic", "strongitalic"} or line_is_italic(line_style)
+    bold = style in {"strong", "strongitalic"} or line_is_bold(line_style)
+    candidates = (
+        "Greek-Italic" if italic else "Greek-Bold" if bold else "Greek-Regular",
+        "Mono",
+        "SourceHanSerifCN-Bold" if bold else "SourceHanSerifCN-Regular",
+        "Latin-Italic" if italic else "Latin-Bold" if bold else "Latin-Regular",
+    )
+    for candidate in candidates:
+        if font_supports_text(candidate, text):
+            return candidate, False
+    unsupported = reportlab_unsupported_chars(text)
+    details = " ".join(f"{ch}(U+{ord(ch):04X})" for ch in unsupported)
+    raise RuntimeError(f"No registered ReportLab font covers segment characters: {details}")
 
 
 @lru_cache(maxsize=32768)
@@ -525,6 +606,19 @@ def reportlab_draw_text(c, x, y, text, fontname, fontsize, fake_bold=False):
     text = text_for_single_pdf_draw(text)
     if not text:
         return
+    if not font_supports_text(fontname, text):
+        unsupported = sorted(
+            {
+                ch
+                for ch in text
+                if not ch.isspace() and not font_supports_char(fontname, ch)
+            },
+            key=ord,
+        )
+        details = " ".join(f"{ch}(U+{ord(ch):04X})" for ch in unsupported)
+        raise RuntimeError(
+            f"Unsafe ReportLab font run reached drawing: font={fontname}, chars={details}"
+        )
     if fake_bold:
         c.saveState()
         c.setLineWidth(max(0.25, fontsize * 0.035))
@@ -1110,6 +1204,7 @@ def render_blocks_to_pdf_reportlab(
     formula_work_dir=None,
     include_full_page_images=True,
     allow_formula_image_fallback=True,
+    progress_callback=None,
 ):
     from reportlab.pdfgen import canvas
 
@@ -1247,12 +1342,18 @@ def render_blocks_to_pdf_reportlab(
         # the current page when it has drawing commands, so a trailing blank
         # source page would otherwise be omitted from the output PDF.
         c.showPage()
+        if progress_callback is not None:
+            progress_callback(page_no + 1, len(page_specs))
     c.save()
 
 
 _COMPONENT_EXPORTS = (
     "reportlab_register_fonts",
     "font_supports_char",
+    "font_supports_text",
+    "reportlab_char_has_registered_glyph",
+    "reportlab_unsupported_chars",
+    "reportlab_safe_text",
     "serif_script_for_char",
     "char_script",
     "split_reportlab_font_runs",
@@ -1299,6 +1400,8 @@ _COMPONENT_EXPORTS = (
     "COMBINING_MARK_RE",
     "CJK_LIKE_RE",
     "FONT_COVERAGE_CACHE",
+    "REPORTLAB_REGISTERED_FONT_NAMES",
+    "REPORTLAB_MISSING_GLYPH_REPLACEMENT",
 )
 _COMPONENT_RUNTIME = ComponentRuntime(globals(), _COMPONENT_EXPORTS)
 

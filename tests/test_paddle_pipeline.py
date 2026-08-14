@@ -290,7 +290,10 @@ class PaddlePipelineTests(unittest.TestCase):
             output_pdf = root / "output.pdf"
             output_images = root / "output_with_images.pdf"
             output_md = root / "output.md"
-            with mock.patch.object(paddle_pipeline, "write_paddle_qc_report"):
+            with (
+                mock.patch.object(paddle_pipeline, "write_paddle_qc_report"),
+                mock.patch.object(paddle_pipeline, "log") as log_mock,
+            ):
                 fallback_pages = paddle_pipeline.build_outputs(
                     source,
                     {0: result},
@@ -306,6 +309,75 @@ class PaddlePipelineTests(unittest.TestCase):
                 self.assertIn("Paddle shared renderer", output[0].get_text())
                 self.assertEqual(output[1].get_text().strip(), "")
                 self.assertFalse(output[0].get_images(full=True))
+            messages = [str(call.args[0]) for call in log_mock.call_args_list]
+            self.assertIn("        Render text PDF page 1/2", messages)
+            self.assertIn("        Render text PDF page 2/2", messages)
+            self.assertIn("        Validate text PDF page 1/2", messages)
+            self.assertIn("        Validate text PDF page 2/2", messages)
+
+    def test_unsupported_glyphs_never_emit_null_and_wave_function_psi_is_repaired(self):
+        self.assertEqual(
+            paddle_pipeline.shared.normalize_draw_segment_text("⚲函数本身不能直接解释"),
+            "Ψ函数本身不能直接解释",
+        )
+        self.assertEqual(
+            paddle_pipeline.shared.reportlab_unsupported_chars("A⚲B"),
+            ["⚲"],
+        )
+        self.assertEqual(
+            paddle_pipeline.shared.reportlab_safe_text("A⚲B"),
+            "A□B",
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.pdf"
+            with fitz.open() as document:
+                document.new_page(width=300, height=400)
+                document.save(source)
+            result = {
+                "cells": [
+                    {
+                        "bbox": [40, 80, 260, 120],
+                        "category": "Text",
+                        "text": "⚲函数本身不能直接解释",
+                        "__bbox_units": "pdf",
+                    },
+                    {
+                        "bbox": [40, 160, 260, 200],
+                        "category": "Text",
+                        "text": "未知符号⚲保留为可见缺字标记",
+                        "__bbox_units": "pdf",
+                    },
+                ],
+                "fallback_text": "",
+                "filtered": False,
+                "needs_retry": False,
+                "image_size": None,
+                "md_nohf_text": "⚲函数本身不能直接解释",
+            }
+            output_pdf = root / "output.pdf"
+            with mock.patch.object(paddle_pipeline, "write_paddle_qc_report"):
+                fallback_pages = paddle_pipeline.build_outputs(
+                    source,
+                    {0: result},
+                    root / "work",
+                    root / "raw",
+                    output_pdf,
+                    root / "output_with_images.pdf",
+                    root / "output.md",
+                )
+
+            self.assertEqual(fallback_pages, [])
+            scan = paddle_pipeline.shared.scan_pdf_validation(output_pdf)
+            self.assertEqual(scan["control_char_offenders"], {})
+            with fitz.open(output_pdf) as output:
+                page = output[0]
+                extracted = page.get_text()
+                self.assertNotIn("\x00", extracted)
+                self.assertIn("Ψ函数本身不能直接解释", extracted)
+                self.assertIn("未知符号□保留为可见缺字标记", extracted)
+                self.assertFalse(page.get_images(full=True))
 
     def test_formula_signed_superscript_does_not_emit_null_character(self):
         formula = (

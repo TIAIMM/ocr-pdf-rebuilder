@@ -42,6 +42,7 @@ class PdfArtifactValidator:
         pdf_path: Path,
         include_markdown: bool | None = None,
         checks: Iterable[str] | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> dict[str, object]:
         if include_markdown is None:
             include_markdown = self.debug_markdown
@@ -96,6 +97,8 @@ class PdfArtifactValidator:
                     markdown_matches = sorted(set(SUSPECTED_MARKDOWN_RE.findall(text)))
                     if markdown_matches:
                         scan["suspected_markdown_offenders"][page_no] = markdown_matches[:5]
+                if progress_callback is not None:
+                    progress_callback(page_no, doc.page_count)
         return scan
 
     def validate_no_radicals(self, pdf_path: Path, validation_scan=None) -> None:

@@ -1,13 +1,13 @@
 {
   "schema": 2,
-  "captured_at": "2026-08-14T07:43:10.847786+00:00",
+  "captured_at": "2026-08-14T08:47:01.331146+00:00",
   "repository_path": "src/ocr_pdf_rebuilder",
   "package_identity": {
     "schema": 1,
     "algorithm": "sha256-canonical-file-manifest-v1",
     "package": "ocr_pdf_rebuilder",
     "file_count": 25,
-    "files_sha256": "c460759d7789c54656e64fd440bdff76fa58285cf5535b3a81cefa86b7bf029f",
+    "files_sha256": "acfd3d30bc2643f45e70ef1ddee2a45ad864525bf09a6ca03723b696142d7895",
     "files": [
       {
         "path": "__init__.py",
@@ -36,8 +36,8 @@
       },
       {
         "path": "gui.py",
-        "size": 39672,
-        "sha256": "fae779dbf9d1eb8a5d918fc1ba8ab6522d33dfb255fe445bbf76fc9e32f8eadd"
+        "size": 41589,
+        "sha256": "1440f5e18636e4003be4d9e7aad4591aded30bc8318d3d1f499b3f6a17ecd12b"
       },
       {
         "path": "layout_engine.py",
@@ -61,8 +61,8 @@
       },
       {
         "path": "paddle_pipeline.py",
-        "size": 34265,
-        "sha256": "cbc3ce7331ac90d61b408f419b17615809c7aab821bc75c2f60290d21bd772f1"
+        "size": 34996,
+        "sha256": "f5182652aa2eebeca16f86b22de96622fc2a780fe699f6f01284f36e4a7f84ec"
       },
       {
         "path": "paddle_textonly_pdf.py",
@@ -81,8 +81,8 @@
       },
       {
         "path": "pdf_validation.py",
-        "size": 8747,
-        "sha256": "8da5c21f3084a128542788bfb68022c5e8fbfdcc50c11faf5f9828d80a78f1a4"
+        "size": 8929,
+        "sha256": "87b936c40ccc9d7fb9fea0ef5dfae26ab4fc9b50ee722144f45ff3d0ad5b7692"
       },
       {
         "path": "pipeline_config.py",
@@ -91,13 +91,13 @@
       },
       {
         "path": "pipeline_orchestrator.py",
-        "size": 14666,
-        "sha256": "391ce62bb09d68948fa5366f2933fee7bd8dfb365083396aeaf6f1d36b5e005e"
+        "size": 15242,
+        "sha256": "c647abe988f4c20345e4ffd5f4ef99397dda9ea2d5994da45bde34aa9d02b281"
       },
       {
         "path": "pipeline_runtime.py",
-        "size": 9973,
-        "sha256": "895444a0625f1e6fac2930bf827c8b0d4cbd7b490a428b31e8ea8d4b4620fb3b"
+        "size": 10061,
+        "sha256": "ab18130ab7f3cda192735e47db31fc3c0207a5c6f21b059d869c5d5b95b5e6b4"
       },
       {
         "path": "process_control.py",
@@ -111,8 +111,8 @@
       },
       {
         "path": "reportlab_renderer.py",
-        "size": 47124,
-        "sha256": "29db971235cdcd4a9338962086a5767bad708bddd36f525c9132dd982402d739"
+        "size": 50770,
+        "sha256": "620582bdb183fa240ab3dead6821a868e6c02267b48a7cdfa68caddbb4445d20"
       },
       {
         "path": "runtime_state.py",
@@ -131,8 +131,8 @@
       },
       {
         "path": "text_processing.py",
-        "size": 54277,
-        "sha256": "b5a41c835cbd835e72dd450cd463049b9817022f2944ac0fed3699da2d0e4cdd"
+        "size": 54771,
+        "sha256": "3a76bcfdd69954dd056034a4bc850ab86b7a477d3c5f1244ced694bb6c20d789"
       }
     ]
   }

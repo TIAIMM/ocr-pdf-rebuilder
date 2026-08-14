@@ -1342,9 +1342,19 @@ def text_for_single_pdf_draw(text):
     return strip_control_chars(text).replace("\n", " ")
 
 
+def normalize_ocr_symbol_confusables(text):
+    text = str(text or "")
+    # PaddleOCR-VL can confuse an italic capital psi with U+26B2 NEUTER in
+    # scanned physics prose. Restrict the correction to the lexical context
+    # used for a wave function so a genuine symbol elsewhere is preserved for
+    # the renderer's generic missing-glyph policy.
+    return re.sub(r"⚲(?=\s*函数)", "Ψ", text)
+
+
 def normalize_ocr_markup_text(text):
     text = html_table_to_text(text)
     text = html_lib.unescape(text)
+    text = normalize_ocr_symbol_confusables(text)
     text = normalize_safe_latex_markup(text)
     text = normalize_citation_superscripts(text)
     text = normalize_safe_latex_markup(text)
@@ -1607,6 +1617,7 @@ _COMPONENT_EXPORTS = (
     "draw_formula_crop_fallback",
     "render_formula_block",
     "text_for_single_pdf_draw",
+    "normalize_ocr_symbol_confusables",
     "normalize_ocr_markup_text",
     "markdown_table_cells",
     "source_text_from_cell",

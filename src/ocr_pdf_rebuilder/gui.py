@@ -340,10 +340,73 @@ class GuiController:
             return
 
         if "[4/5] Rendering text-only PDF" in line:
-            self._set_progress(record, stage="渲染纯文字 PDF", percent=85.0)
+            self._set_progress(
+                record,
+                stage="渲染纯文字 PDF",
+                percent=85.0,
+                page_current=0,
+            )
             return
+
+        match = re.search(r"Render text PDF page (\d+)/(\d+)", line)
+        if match:
+            current = int(match.group(1))
+            total = int(match.group(2))
+            self._set_progress(
+                record,
+                stage="渲染纯文字 PDF",
+                percent=85.0 + 5.0 * current / total,
+                page_current=current,
+                page_total=total,
+            )
+            return
+
+        match = re.search(r"Validate text PDF page (\d+)/(\d+)", line)
+        if match:
+            current = int(match.group(1))
+            total = int(match.group(2))
+            self._set_progress(
+                record,
+                stage="验证纯文字 PDF",
+                percent=90.0 + 3.0 * current / total,
+                page_current=current,
+                page_total=total,
+            )
+            return
+
         if "Rendering image-variant PDF" in line:
-            self._set_progress(record, stage="渲染带图片 PDF", percent=92.0)
+            self._set_progress(
+                record,
+                stage="渲染带图片 PDF",
+                percent=93.0,
+                page_current=0,
+            )
+            return
+
+        match = re.search(r"Render image PDF page (\d+)/(\d+)", line)
+        if match:
+            current = int(match.group(1))
+            total = int(match.group(2))
+            self._set_progress(
+                record,
+                stage="渲染带图片 PDF",
+                percent=93.0 + 2.0 * current / total,
+                page_current=current,
+                page_total=total,
+            )
+            return
+
+        match = re.search(r"Validate image PDF page (\d+)/(\d+)", line)
+        if match:
+            current = int(match.group(1))
+            total = int(match.group(2))
+            self._set_progress(
+                record,
+                stage="验证带图片 PDF",
+                percent=95.0 + 3.0 * current / total,
+                page_current=current,
+                page_total=total,
+            )
             return
         if line.startswith("QC report:"):
             self._set_progress(record, stage="生成并验证 QC", percent=98.0)

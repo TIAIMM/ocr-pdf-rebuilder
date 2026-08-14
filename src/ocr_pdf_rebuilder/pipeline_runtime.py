@@ -244,11 +244,17 @@ def pdf_artifact_validator():
     )
 
 
-def scan_pdf_validation(pdf_path, include_markdown=None, checks=None):
+def scan_pdf_validation(
+    pdf_path,
+    include_markdown=None,
+    checks=None,
+    progress_callback=None,
+):
     return pdf_artifact_validator().scan(
         pdf_path,
         include_markdown=include_markdown,
         checks=checks,
+        progress_callback=progress_callback,
     )
 
 

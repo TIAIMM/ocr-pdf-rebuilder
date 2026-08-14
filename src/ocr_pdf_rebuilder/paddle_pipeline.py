@@ -795,13 +795,25 @@ def build_outputs(
         formula_work_dir=work_dir / "formula_render_cache",
         include_full_page_images=False,
         allow_formula_image_fallback=False,
+        progress_callback=lambda current, total: log(
+            f"        Render text PDF page {current}/{total}"
+        ),
     )
-    validation = shared.scan_pdf_validation(output_pdf)
+    validation = shared.scan_pdf_validation(
+        output_pdf,
+        progress_callback=lambda current, total: log(
+            f"        Validate text PDF page {current}/{total}"
+        ),
+    )
     shared.validate_pdf_page_count(output_pdf, page_count, validation)
     shared.validate_pdf_has_no_raster_images(output_pdf, validation)
     shared.validate_pdf_pages_are_blank(output_pdf, image_fallback_pages, validation)
 
     if image_fallback_pages:
+        log(
+            f"    Rendering image-variant PDF for {len(image_fallback_pages)} fallback page(s): "
+            f"{output_image_pdf}"
+        )
         image_specs = [
             (width, height, [dict(block) for block in blocks])
             for width, height, blocks in page_specs
@@ -812,8 +824,16 @@ def build_outputs(
             formula_work_dir=work_dir / "formula_render_cache",
             include_full_page_images=True,
             allow_formula_image_fallback=True,
+            progress_callback=lambda current, total: log(
+                f"        Render image PDF page {current}/{total}"
+            ),
         )
-        image_validation = shared.scan_pdf_validation(output_image_pdf)
+        image_validation = shared.scan_pdf_validation(
+            output_image_pdf,
+            progress_callback=lambda current, total: log(
+                f"        Validate image PDF page {current}/{total}"
+            ),
+        )
         shared.validate_pdf_page_count(output_image_pdf, page_count, image_validation)
         shared.validate_pdf_has_images_on_pages(
             output_image_pdf, image_fallback_pages, image_validation

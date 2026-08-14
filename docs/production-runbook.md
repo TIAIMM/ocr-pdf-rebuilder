@@ -78,8 +78,12 @@ after 30 seconds it escalates termination. Wait for the status to leave
 - every fallback page is blank in text-only output and imaged in the image
   variant;
 - formula, table, footnote and reading-order suspect pages are reviewed from QC;
-- formula extraction contains no control characters; formulas whose scripts
-  cannot be represented losslessly as Unicode use the vector formula path;
+- extracted output contains no control characters. Before ReportLab draws a
+  run, its selected font must cover every character; known OCR symbol
+  confusions are normalized, and an otherwise unsupported code point becomes
+  a visible `□` review marker instead of a hidden `.notdef` glyph that extracts
+  as U+0000. Formulas whose scripts cannot be represented losslessly as Unicode
+  use the vector formula path;
 - `paddle_bbox_content_repaired` pages are reviewed to confirm the reference
   marker and reassigned body occupy their distinct source-layout boxes;
 - any unresolved non-formula OCR block that cannot fit its bbox produces a
@@ -92,3 +96,6 @@ after 30 seconds it escalates termination. Wait for the status to leave
 
 Page-count equality is necessary but does not prove visual or textual quality.
 Representative rendered-page inspection remains part of production acceptance.
+During step 4, the log and GUI must advance through `Render text PDF page`,
+`Validate text PDF page`, and, when a companion artifact exists, `Render image
+PDF page` plus `Validate image PDF page`, each with current/total page counts.

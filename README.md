@@ -209,9 +209,11 @@ validating both the text-only artifact and any image variant, so a long final
 build no longer appears stalled. It binds to localhost by default and has no
 upload or delete operation.
 
-## License status
+## License
 
-No public license has been selected. Until code provenance and third-party
-notices are reviewed, this repository should remain private and no permission to
-redistribute its contents is implied. MinerU, model weights and fonts retain
-their own licenses and are not vendored here.
+The source code and documentation in this repository are released under the
+[MIT License](LICENSE).
+
+Runtime dependencies, MinerU, PaddleOCR, model weights and locally installed
+fonts retain their own licenses. User-provided input documents and generated
+artifacts are not relicensed by this project.

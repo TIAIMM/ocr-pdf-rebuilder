@@ -1,13 +1,13 @@
 {
   "schema": 2,
-  "captured_at": "2026-08-15T14:02:57.569172+00:00",
+  "captured_at": "2026-08-15T15:05:19.863133+00:00",
   "repository_path": "src/ocr_pdf_rebuilder",
   "package_identity": {
     "schema": 1,
     "algorithm": "sha256-canonical-file-manifest-v1",
     "package": "ocr_pdf_rebuilder",
-    "file_count": 25,
-    "files_sha256": "fd5eed62e229cc54a10cb3bf5a9f18615e94fd04266beebe6e83dab3a76c5d82",
+    "file_count": 26,
+    "files_sha256": "aed84a0ad8824a927416d0a7c82f6e296fdc49135e4ffbaff17c79cbf7aa0046",
     "files": [
       {
         "path": "__init__.py",
@@ -36,13 +36,18 @@
       },
       {
         "path": "gui.py",
-        "size": 43721,
-        "sha256": "1f05a0a93f3c8154279d361085fcc6df65308f294d14f032718bfadc49675011"
+        "size": 44577,
+        "sha256": "83c85d73021dee8579dd6ff7da535d0548d18a582ccb345e4aad0d98c06fa961"
       },
       {
         "path": "layout_engine.py",
         "size": 42807,
         "sha256": "243beed5f474ee6ee21ad70dacee0f76b9134d3049f4dfc62b3958eb8d5fa4c5"
+      },
+      {
+        "path": "mineru_api_session.py",
+        "size": 16706,
+        "sha256": "16f137455823adfe3703ed367119516601c4feb20e05c70e59131793b0248792"
       },
       {
         "path": "mineru_pipeline.py",
@@ -56,8 +61,8 @@
       },
       {
         "path": "mineru_runner.py",
-        "size": 19219,
-        "sha256": "bb23e6cb1394921076114e0576546b278318a0f8e1b9a5ed11f639f55badef0a"
+        "size": 21203,
+        "sha256": "d42b66f6d58bdd8785b6ac936105a43e8624de31be4ade2ecff92469e3b8eaba"
       },
       {
         "path": "paddle_pipeline.py",
@@ -76,8 +81,8 @@
       },
       {
         "path": "page_recovery.py",
-        "size": 20558,
-        "sha256": "42bbc6f6c0b962af30ffe86a6d7f8fa4fd4f001f3b0d47530b4d0b29c5380f5e"
+        "size": 20796,
+        "sha256": "248ef00f483c6008a7b05ee3fa42790ac3306a2de7f64866341a69a17f699da8"
       },
       {
         "path": "pdf_validation.py",
@@ -86,13 +91,13 @@
       },
       {
         "path": "pipeline_config.py",
-        "size": 6405,
-        "sha256": "b444202684cdd59174df52bd0d55a22c85a5f4d0e06302f544388aa49801909d"
+        "size": 7193,
+        "sha256": "96c476589a67d7d047986adb079953e901bcedeee275a90447f7ab3fede7d236"
       },
       {
         "path": "pipeline_orchestrator.py",
-        "size": 14834,
-        "sha256": "ba2270c3a720f824addd0ba1e8b1ae3d2e4d12188029b5c7ed67e4ee6ba9e28e"
+        "size": 15247,
+        "sha256": "9749c71f3b40e1f5c8267614961ed8475b10da598acc1ebb7833e86b41a08934"
       },
       {
         "path": "pipeline_runtime.py",
@@ -116,8 +121,8 @@
       },
       {
         "path": "runtime_state.py",
-        "size": 16647,
-        "sha256": "d6a7146262725370b0927ea45bc193bf94acb372d8e9f5c8964eccfb2d161647"
+        "size": 17985,
+        "sha256": "c403693a0cda98571181cd8922e750dfcbe8150f1c6e50428f55b33e4b1046a2"
       },
       {
         "path": "signal_cleanup.py",

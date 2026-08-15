@@ -14,9 +14,21 @@ controller interruption and lingering children all enter process-group cleanup:
 SIGTERM, bounded grace period, then SIGKILL if necessary.
 
 Errors such as temporary service unavailability, connection reset, NCCL failure,
-`EngineCore failed` and resource exhaustion are classified as transient. Retry
-the same task first. Recursive splitting is for persistent content/task failure,
-not the first infrastructure failure.
+`EngineCore failed`, `EngineDeadError`, `CUDA error: unknown error` and resource
+exhaustion are classified as transient. The document-owned API is stopped,
+including its vLLM descendants, and restarted with a fresh preloaded model
+before the exact same task is retried. Consecutive service restart is bounded
+to two per parser task, matching the two retry transitions in a three-attempt
+task; a successfully completed chunk resets that task-local budget. Recursive splitting
+is for persistent content/task failure, never a run consisting only of
+infrastructure failures.
+
+The local API receives `MINERU_API_SHUTDOWN_ON_STDIN_EOF=1`; closing the parent
+side of that pipe is the primary normal and hard-parent-exit cleanup mechanism.
+The API also owns a dedicated POSIX process group. After the bounded graceful
+shutdown interval, remaining API or vLLM processes receive SIGTERM and then
+SIGKILL. A configured external `MINERU_API_URL` is only health-checked because
+the batch does not own it.
 
 ## Paddle worker or vLLM failure
 

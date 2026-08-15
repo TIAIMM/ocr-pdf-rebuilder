@@ -46,6 +46,15 @@ Individual failures are reported there and do not prevent later files from
 being attempted. The process exits nonzero if the completed batch contains any
 failed file.
 
+For each document that actually needs inference, MinerU starts one local
+`mineru-api` on an ephemeral loopback port with VLM preload enabled and request
+concurrency fixed at one. Every initial 60-page chunk, adaptive retry and
+page-repair batch receives that same API URL. If all relevant chunk and repair
+checkpoints are reusable, startup remains lazy and no model is loaded. The API
+log is `logs_mineru/<document>_mineru_api_server.log`; chunk client logs remain
+separate. `MINERU_API_URL` is an optional external-service override. An external
+service must already be healthy and remains outside this batch's lifecycle.
+
 MinerU and Paddle share one non-blocking runtime lock at
 `tmp/ocr_pdf_rebuilder/task.lock`. A second GUI or CLI process reports the
 current owner PID, engine and start time, then exits with code 2 without
@@ -70,15 +79,18 @@ worker/server cleanup can run. Closing the GUI terminal also requests cleanup;
 after 30 seconds it escalates termination. Wait for the status to leave
 “正在安全停止” before closing the GUI terminal when practical.
 
-MinerU model initialization and one 60-page inference chunk may produce no
-page-level output for several minutes. The controller emits
+MinerU model initialization now occurs once per document rather than once per
+60-page chunk. Initialization and one chunk may still produce no page-level
+output for several minutes. API preload emits `MinerU API still starting`, and
+the chunk controller emits
 `[controller] ... still running` every 30 seconds during such a silent interval;
-this heartbeat is displayed in the active GUI stage but does not advance the
-percentage or reset the 20-minute idle timeout. Do not restart solely because
-the page counter is unchanged while heartbeats continue. A safe or terminal
-interrupt writes batch status `interrupted` and preserves only checkpoints for
-chunks that completed before the interrupt. MinerU cannot resume inside an
-unfinished engine invocation, so that chunk starts again on the next run.
+both are displayed in the active GUI stage without falsely advancing the
+percentage. The chunk heartbeat does not reset the 20-minute idle timeout. Do
+not restart solely because the page counter is unchanged while heartbeats
+continue. A safe or terminal interrupt writes batch status `interrupted`,
+closes the document-owned API and preserves only checkpoints for chunks that
+completed before the interrupt. MinerU cannot resume inside an unfinished
+engine invocation, so that chunk starts again on the next run.
 
 ## Acceptance
 

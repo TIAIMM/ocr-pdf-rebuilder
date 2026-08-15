@@ -21,7 +21,13 @@ def apply_forward_page_leak_metadata(result, original, validation=None):
     append_retry_reason(result, FORWARD_PAGE_LEAK_RETRY_REASON)
 
 
-def repair_forward_page_content_leaks(pdf_path, page_results, work_dir, log_path):
+def repair_forward_page_content_leaks(
+    pdf_path,
+    page_results,
+    work_dir,
+    log_path,
+    api_session=None,
+):
     source_texts = source_page_overlap_texts(pdf_path)
     detected = detect_forward_page_content_leaks(
         pdf_path,
@@ -60,6 +66,7 @@ def repair_forward_page_content_leaks(pdf_path, page_results, work_dir, log_path
                 retry_output_dir,
                 retry_log,
                 retry_checkpoint,
+                api_session=api_session,
             )
         except Exception as exc:
             log(f"    Isolated MinerU repair batch {batch_number} failed: {exc}")
@@ -179,7 +186,13 @@ def collapse_repeated_text_in_split_band_result(result):
     return result
 
 
-def retry_bad_pages(pdf_path, page_results, work_dir, log_path):
+def retry_bad_pages(
+    pdf_path,
+    page_results,
+    work_dir,
+    log_path,
+    api_session=None,
+):
     bad_pages = sorted(
         page_index
         for page_index, result in page_results.items()
@@ -212,6 +225,7 @@ def retry_bad_pages(pdf_path, page_results, work_dir, log_path):
             retry_output_dir,
             retry_log,
             retry_checkpoint,
+            api_session=api_session,
         )
     except Exception as exc:
         log(f"    Batched MinerU quality retry failed; keeping sanitized originals: {exc}")
@@ -268,7 +282,13 @@ def force_table_cells_to_text(result):
     return result
 
 
-def retry_unfitting_table_pages_as_text_batch(pdf_path, page_results, work_dir, log_path):
+def retry_unfitting_table_pages_as_text_batch(
+    pdf_path,
+    page_results,
+    work_dir,
+    log_path,
+    api_session=None,
+):
     candidates = []
     with fitz.open(pdf_path) as src:
         for page_index, result in sorted(page_results.items()):
@@ -307,6 +327,7 @@ def retry_unfitting_table_pages_as_text_batch(pdf_path, page_results, work_dir, 
             retry_log,
             retry_checkpoint,
             table_enabled=False,
+            api_session=api_session,
         )
     except Exception as exc:
         log(f"    Batched table-off retry failed; affected pages will use image fallback: {exc}")

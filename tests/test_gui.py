@@ -165,6 +165,30 @@ class GuiControllerTests(unittest.TestCase):
         self.assertIn("已运行 5m00s", progress["stage"])
         self.assertIn("静默 4m30s（进程存活）", progress["stage"])
 
+    def test_tracks_owned_mineru_api_startup_and_restart(self):
+        (self.input_dir / "sample.pdf").write_bytes(b"fixture")
+        controller = self.controller([sys.executable, "-c", "pass"])
+        with controller._lock:
+            controller._reset_file_progress(controller.list_inputs())
+            controller._consume_progress_text(
+                "[1/1] Start: sample.pdf\n"
+                "    Pages:  399\n"
+                "    [1/5] Running MinerU parser\n"
+                "    Starting batch-owned MinerU API; one model load will be shared\n"
+                "    MinerU API still starting: elapsed=30.0s (pid=123)\n"
+            )
+        progress = controller.status()["file_progress"][0]
+        self.assertEqual(progress["stage"], "启动并预热 MinerU 服务 · 已运行 30.0s")
+        self.assertEqual(progress["percent"], 0.1)
+
+        with controller._lock:
+            controller._consume_progress_text(
+                "    MinerU API ready: http://127.0.0.1:43210 (pid=123)\n"
+                "    Restarting batch-owned MinerU API (1/2): EngineDeadError\n"
+            )
+        progress = controller.status()["file_progress"][0]
+        self.assertEqual(progress["stage"], "重启并预热 MinerU 服务")
+
     def test_tracks_paddleocr_page_progress(self):
         (self.input_dir / "sample.pdf").write_bytes(b"fixture")
         controller = self.controller([sys.executable, "-c", "pass"])

@@ -135,23 +135,39 @@ def process_pdf(pdf_path, index, total):
 
     log(f"    Pages:  {page_count}")
     log("    [1/5] Running MinerU parser")
-    parser_runs = build_mineru_parser_runs(pdf_path, page_count, work_dir, mineru_dir, log_path)
+    with create_mineru_api_session(work_dir, log_path) as api_session:
+        parser_runs = build_mineru_parser_runs(
+            pdf_path,
+            page_count,
+            work_dir,
+            mineru_dir,
+            log_path,
+            api_session=api_session,
+        )
 
-    log("    [2/5] Loading MinerU JSON")
-    page_results = collect_parser_run_results(pdf_path, parser_runs)
-    page_results = retry_bad_pages(pdf_path, page_results, work_dir, log_path)
-    page_results = retry_unfitting_table_pages_as_text_batch(
-        pdf_path,
-        page_results,
-        work_dir,
-        log_path,
-    )
-    page_results = repair_forward_page_content_leaks(
-        pdf_path,
-        page_results,
-        work_dir,
-        log_path,
-    )
+        log("    [2/5] Loading MinerU JSON")
+        page_results = collect_parser_run_results(pdf_path, parser_runs)
+        page_results = retry_bad_pages(
+            pdf_path,
+            page_results,
+            work_dir,
+            log_path,
+            api_session=api_session,
+        )
+        page_results = retry_unfitting_table_pages_as_text_batch(
+            pdf_path,
+            page_results,
+            work_dir,
+            log_path,
+            api_session=api_session,
+        )
+        page_results = repair_forward_page_content_leaks(
+            pdf_path,
+            page_results,
+            work_dir,
+            log_path,
+            api_session=api_session,
+        )
     suppress_blank_page_outputs(pdf_path, page_results)
     page_results = degrade_repeated_pseudotext_pages_to_images(pdf_path, page_results, work_dir)
     page_results = degrade_unusable_nonblank_pages_to_images(pdf_path, page_results, work_dir)

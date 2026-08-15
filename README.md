@@ -42,6 +42,8 @@ components have no dependency back to either CLI entry point:
   output validation;
 - `process_control.py`: streamed child-process execution, timeout handling and
   descendant process-group cleanup;
+- `mineru_api_session.py`: lazy document-owned MinerU API startup, health
+  checks, bounded engine restart and unconditional service cleanup;
 - `mineru_runner.py`: MinerU command construction, retries, page chunking and
   resumable parser runs;
 - `mineru_results.py`: MinerU JSON selection, normalization and page-result
@@ -186,6 +188,16 @@ host. The pipeline checkpoints every page, retries suspicious pages against the
 same server session, and then uses the same cross-page checks,
 ReportLab renderer, text-only/image-variant contract and PDF validators.
 
+MinerU likewise uses one lazy, document-owned local `mineru-api` service. A long
+PDF's 60-page chunks and all page-level retries share the same preloaded model,
+while request concurrency remains one for 12 GB VRAM stability. The service is
+not started when every required checkpoint is reusable. Normal completion,
+failure and interruption close its official stdin EOF shutdown channel and
+then enforce process-group cleanup. A poisoned CUDA/vLLM engine causes a
+bounded whole-service restart before the same chunk is retried. Set
+`MINERU_API_URL` only to use an already managed external service; the batch
+health-checks but never stops or restarts an external service.
+
 Operational details and recovery rules are in `docs/production-runbook.md` and
 `docs/failure-recovery.md`.
 
@@ -211,8 +223,9 @@ log emits a liveness heartbeat every 30 seconds and the active file stage shows
 that the process is alive without falsely advancing its percentage. A manual
 stop finalizes the batch summary as `interrupted`; completed chunk checkpoints
 remain reusable, but an unfinished MinerU chunk must restart from that chunk's
-first page. The GUI binds to localhost by default and has no upload or delete
-operation.
+first page. MinerU service startup, model preloading and bounded service restart
+are shown as explicit GUI stages. The GUI binds to localhost by default and has
+no upload or delete operation.
 
 ## License
 

@@ -15,6 +15,7 @@ LOG_DIR = RUNTIME_ROOT / "logs_mineru"
 QC_DIR = RUNTIME_ROOT / "qc_mineru"
 
 MINERU_COMMAND = "mineru"
+MINERU_API_COMMAND = "mineru-api"
 
 CJK_REGULAR_FONT = RUNTIME_ROOT / "fonts/SourceHanSerifCN-Regular.ttf"
 CJK_MEDIUM_FONT = RUNTIME_ROOT / "fonts/SourceHanSerifCN-Medium.ttf"
@@ -34,7 +35,17 @@ DPI = 200
 OUTPUT_VERSION = "mineru-reportlab-cell-aware-render-v52-forward-page-leak-repair"
 
 # MinerU execution. Leave values as None to keep MinerU's own defaults.
-MINERU_API_URL = None
+# When MINERU_API_URL is unset, each document owns one lazy local API process
+# which is shared by all of its chunks and page-level retries.
+MINERU_API_URL = (os.environ.get("MINERU_API_URL") or "").strip() or None
+MINERU_API_HOST = "127.0.0.1"
+MINERU_API_ENABLE_VLM_PRELOAD = True
+MINERU_API_MAX_CONCURRENT_REQUESTS = 1
+MINERU_API_STARTUP_TIMEOUT_SECONDS = 5 * 60
+MINERU_API_HEALTH_TIMEOUT_SECONDS = 2
+MINERU_API_SHUTDOWN_GRACE_SECONDS = 30
+MINERU_API_START_ATTEMPTS = 3
+MINERU_API_MAX_RESTARTS = 2
 MINERU_BACKEND = "hybrid-engine"
 MINERU_METHOD = "auto"
 MINERU_LANG = None
@@ -124,11 +135,18 @@ TRANSIENT_MINERU_FAILURE_PATTERNS = [
     "connection closed",
     "connection refused",
     "connection reset",
+    "configured external mineru api is not healthy",
+    "cuda error: unknown error",
     "database is locked",
     "engine core failed",
+    "enginecore encountered a fatal error",
     "engine process failed",
     "enginecore failed",
+    "enginedeaderror",
     "failed to start",
+    "mineru api did not become healthy",
+    "mineru api exited during startup",
+    "mineru api restart limit exhausted",
     "nccl error",
     "port is already in use",
     "produced no stdout/stderr",

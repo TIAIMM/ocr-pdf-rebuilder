@@ -11,6 +11,7 @@ import time
 import fitz
 
 from .component_runtime import ComponentRuntime
+from .mineru_api_session import MinerUApiSession
 from .pipeline_config import *
 
 def parser_log_has_json_errors(log_path):
@@ -44,10 +45,10 @@ def mineru_failure_is_transient(error, log_path=None):
     return any(pattern in text for pattern in TRANSIENT_MINERU_FAILURE_PATTERNS)
 
 
-def optional_cli_args(table_enabled=None):
+def optional_cli_args(table_enabled=None, api_url=None):
     args = []
     option_pairs = [
-        ("--api-url", MINERU_API_URL),
+        ("--api-url", MINERU_API_URL if api_url is None else api_url),
         ("-b", MINERU_BACKEND),
         ("-m", MINERU_METHOD),
         ("-l", MINERU_LANG),
@@ -72,15 +73,44 @@ def optional_cli_args(table_enabled=None):
     return args + list(MINERU_EXTRA_ARGS)
 
 
+def create_mineru_api_session(work_dir, log_path):
+    api_log_path = log_path.with_name(
+        f"{log_path.stem}_api_server{log_path.suffix}"
+    )
+    return MinerUApiSession(
+        api_url=MINERU_API_URL,
+        api_command=MINERU_API_COMMAND,
+        host=MINERU_API_HOST,
+        enable_vlm_preload=MINERU_API_ENABLE_VLM_PRELOAD,
+        max_concurrent_requests=MINERU_API_MAX_CONCURRENT_REQUESTS,
+        startup_timeout_seconds=MINERU_API_STARTUP_TIMEOUT_SECONDS,
+        health_timeout_seconds=MINERU_API_HEALTH_TIMEOUT_SECONDS,
+        shutdown_grace_seconds=MINERU_API_SHUTDOWN_GRACE_SECONDS,
+        start_attempts=MINERU_API_START_ATTEMPTS,
+        max_restarts=MINERU_API_MAX_RESTARTS,
+        heartbeat_seconds=OCR_PROCESS_HEARTBEAT_SECONDS,
+        cwd=RUNTIME_ROOT,
+        server_output_root=Path(work_dir) / "mineru_api_server",
+        log_path=api_log_path,
+        logger=log,
+        process_controller=live_process_controller(process_label="MinerU API"),
+    )
+
+
 def run_mineru_parser(
     pdf_path,
     output_root,
     log_path,
     result_dir=None,
     table_enabled=None,
+    api_session=None,
 ):
     if result_dir is None:
         result_dir = output_root / pdf_path.stem
+
+    api_url = MINERU_API_URL
+    if api_session is not None:
+        api_url = api_session.ensure_ready()
 
     cmd = [
         MINERU_COMMAND,
@@ -88,7 +118,7 @@ def run_mineru_parser(
         str(pdf_path),
         "-o",
         str(output_root),
-        *optional_cli_args(table_enabled=table_enabled),
+        *optional_cli_args(table_enabled=table_enabled, api_url=api_url),
     ]
 
     log(f"    MinerU command: {' '.join(cmd)}")
@@ -116,6 +146,7 @@ def run_mineru_parser_with_retries(
     result_dir=None,
     table_enabled=None,
     max_attempts=None,
+    api_session=None,
 ):
     attempts = PARSER_MAX_ATTEMPTS if max_attempts is None else int(max_attempts)
     attempts = max(1, attempts)
@@ -142,6 +173,7 @@ def run_mineru_parser_with_retries(
                 attempt_log,
                 result_dir=result_dir,
                 table_enabled=table_enabled,
+                api_session=api_session,
             )
             if parser_log_has_json_errors(attempt_log):
                 raise RuntimeError(
@@ -152,6 +184,8 @@ def run_mineru_parser_with_retries(
                     f"MinerU finished without a usable middle/content JSON result: {output_root}"
                 )
             result_manifest = build_mineru_result_manifest(pdf_path, output_root)
+            if api_session is not None:
+                api_session.mark_task_success()
             if attempt > 1:
                 log(f"    Same-task MinerU retry succeeded on attempt {attempt}/{attempts}")
             return result_manifest
@@ -172,6 +206,13 @@ def run_mineru_parser_with_retries(
             )
             if attempt >= attempts:
                 break
+            if transient and api_session is not None:
+                try:
+                    api_session.recover_after_failure(exc, attempt_log)
+                except RuntimeError as recovery_exc:
+                    failures[-1]["recovery_error"] = str(recovery_exc)
+                    log(f"    MinerU API recovery failed: {recovery_exc}")
+                    break
 
     transient_only = bool(failures) and all(item["transient"] for item in failures)
     details = " | ".join(
@@ -256,6 +297,7 @@ def run_or_reuse_mineru_selected_pages(
     log_path,
     checkpoint_path,
     table_enabled=None,
+    api_session=None,
 ):
     page_indices = [int(page_index) for page_index in page_indices]
     identity = selected_pages_checkpoint_identity(
@@ -290,6 +332,7 @@ def run_or_reuse_mineru_selected_pages(
         output_root,
         log_path,
         table_enabled=table_enabled,
+        api_session=api_session,
     )
     write_checkpoint(
         checkpoint_path,
@@ -311,6 +354,7 @@ def run_or_reuse_mineru_isolated_pages(
     output_root,
     log_path,
     checkpoint_path,
+    api_session=None,
 ):
     page_indices = [int(page_index) for page_index in page_indices]
     identity = isolated_pages_checkpoint_identity(pdf_path, page_indices)
@@ -340,6 +384,7 @@ def run_or_reuse_mineru_isolated_pages(
         isolated_pdf,
         output_root,
         log_path,
+        api_session=api_session,
     )
     write_checkpoint(
         checkpoint_path,
@@ -354,7 +399,14 @@ def run_or_reuse_mineru_isolated_pages(
     return collect_page_results(isolated_pdf, output_root)
 
 
-def build_mineru_parser_runs(pdf_path, page_count, work_dir, mineru_dir, log_path):
+def build_mineru_parser_runs(
+    pdf_path,
+    page_count,
+    work_dir,
+    mineru_dir,
+    log_path,
+    api_session=None,
+):
     chunk_pdf_dir = work_dir / "mineru_pdf_chunks"
     checkpoint_dir = work_dir / "mineru_checkpoints"
     chunk_output_root = mineru_dir / "chunks"
@@ -423,6 +475,7 @@ def build_mineru_parser_runs(pdf_path, page_count, work_dir, mineru_dir, log_pat
                 chunk_pdf,
                 chunk_output_dir,
                 chunk_log,
+                api_session=api_session,
             )
         except RuntimeError as exc:
             if isinstance(exc, MinerUParserAttemptsExhausted) and exc.transient_only:
@@ -507,6 +560,7 @@ _COMPONENT_EXPORTS = (
     "MinerUParserAttemptsExhausted",
     "mineru_failure_is_transient",
     "optional_cli_args",
+    "create_mineru_api_session",
     "run_mineru_parser",
     "run_mineru_parser_with_retries",
     "write_pdf_page_chunk",

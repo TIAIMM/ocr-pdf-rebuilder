@@ -277,6 +277,28 @@ class GuiController:
             self._set_progress(record, stage="MinerU 解析", percent=0.1)
             return
 
+        if "Starting batch-owned MinerU API" in line:
+            self._set_progress(record, stage="启动并预热 MinerU 服务", percent=0.1)
+            return
+
+        if "MinerU API still starting:" in line:
+            match = re.search(r"elapsed=([0-9.]+s)", line)
+            elapsed = f" · 已运行 {match.group(1)}" if match else ""
+            self._set_progress(
+                record,
+                stage=f"启动并预热 MinerU 服务{elapsed}",
+                percent=0.1,
+            )
+            return
+
+        if "MinerU API ready:" in line:
+            self._set_progress(record, stage="MinerU 服务已就绪，准备解析", percent=0.1)
+            return
+
+        if "Restarting batch-owned MinerU API" in line:
+            self._set_progress(record, stage="重启并预热 MinerU 服务", percent=0.1)
+            return
+
         if "[1/5] Running PaddleOCR-VL parser" in line:
             self._set_progress(record, stage="PaddleOCR-VL 逐页识别", percent=0.1)
             return

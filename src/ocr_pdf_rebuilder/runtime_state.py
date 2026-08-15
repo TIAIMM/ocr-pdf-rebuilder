@@ -27,6 +27,17 @@ def bool_cli_value(value):
 
 def mineru_parser_config(table_enabled=None):
     return {
+        "api": {
+            "mode": "external" if MINERU_API_URL else "document_owned_local",
+            "url": MINERU_API_URL,
+            "host": None if MINERU_API_URL else MINERU_API_HOST,
+            "enable_vlm_preload": (
+                None if MINERU_API_URL else MINERU_API_ENABLE_VLM_PRELOAD
+            ),
+            "max_concurrent_requests": (
+                None if MINERU_API_URL else MINERU_API_MAX_CONCURRENT_REQUESTS
+            ),
+        },
         "backend": MINERU_BACKEND,
         "method": MINERU_METHOD,
         "lang": MINERU_LANG,
@@ -169,19 +180,32 @@ def mineru_model_identity():
 @lru_cache(maxsize=1)
 def mineru_runtime_identity():
     executable = shutil.which(MINERU_COMMAND)
+    api_executable = shutil.which(MINERU_API_COMMAND)
     packages = installed_package_versions()
     command_error = None if executable else f"command not found: {MINERU_COMMAND}"
+    api_command_error = (
+        None if api_executable else f"command not found: {MINERU_API_COMMAND}"
+    )
     executable_signature = None
+    api_executable_signature = None
     if executable:
         try:
             executable_signature = file_content_signature(executable)
         except OSError as exc:
             command_error = command_error or f"could not hash executable: {exc}"
+    if api_executable:
+        try:
+            api_executable_signature = file_content_signature(api_executable)
+        except OSError as exc:
+            api_command_error = api_command_error or f"could not hash executable: {exc}"
     identity = {
         "mineru_command": MINERU_COMMAND,
         "mineru_version_output": packages.get("mineru"),
         "mineru_command_error": command_error,
         "mineru_executable": executable_signature,
+        "mineru_api_command": MINERU_API_COMMAND,
+        "mineru_api_command_error": api_command_error,
+        "mineru_api_executable": api_executable_signature,
         "python": {
             "executable": str(Path(sys.executable).resolve()),
             "version": platform.python_version(),
@@ -231,12 +255,17 @@ def normalize_runtime_identity(identity):
     python_identity = identity.get("python") or {}
     packages = identity.get("packages") or {}
     return {
-        "identity_schema": 2,
+        "identity_schema": 3,
         "mineru_command": identity.get("mineru_command"),
         "mineru_version_output": identity.get("mineru_version_output"),
         "mineru_command_error": identity.get("mineru_command_error"),
         "mineru_executable": normalized_runtime_file_signature(
             identity.get("mineru_executable")
+        ),
+        "mineru_api_command": identity.get("mineru_api_command"),
+        "mineru_api_command_error": identity.get("mineru_api_command_error"),
+        "mineru_api_executable": normalized_runtime_file_signature(
+            identity.get("mineru_api_executable")
         ),
         "python": {
             "executable": python_identity.get("executable"),

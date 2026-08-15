@@ -19,6 +19,7 @@ from ocr_pdf_rebuilder.component_runtime import ComponentRuntime
 from ocr_pdf_rebuilder import (
     layout_engine,
     mineru_results,
+    mineru_api_session,
     mineru_runner,
     page_recovery,
     pipeline_orchestrator,
@@ -39,6 +40,7 @@ class PipelineModuleBoundaryTests(unittest.TestCase):
             "forward_page_leak.py",
             "layout_engine.py",
             "mineru_results.py",
+            "mineru_api_session.py",
             "mineru_runner.py",
             "page_recovery.py",
             "pdf_validation.py",

@@ -38,9 +38,12 @@ never be staged.
 - Both output variants preserve source page count, including trailing blanks.
 
 MinerU additionally chunks long PDFs and prefers `_middle.json` block/line/span
-data. PaddleOCR-VL keeps one page worker per document, uses one managed local
-vLLM server session on the current Blackwell host, processes individual pages,
-and atomically checkpoints normalized page JSON. The page worker and inference
-server have separate owned process groups and are both reclaimed on every exit
-path. Both engines converge on the same layout, rendering, QC and
-artifact-validation stack.
+data. All chunks and repair passes for one document share one lazy preloaded
+`mineru-api` process at concurrency one. The API is connected to an official
+stdin-EOF shutdown channel and owns a process group; transient CUDA/vLLM engine
+death restarts that whole service within a bounded retry budget. PaddleOCR-VL
+keeps one page worker per document, uses one managed local vLLM server session
+on the current Blackwell host, processes individual pages, and atomically
+checkpoints normalized page JSON. Owned workers and inference servers are
+reclaimed on every exit path. Both engines converge on the same layout,
+rendering, QC and artifact-validation stack.

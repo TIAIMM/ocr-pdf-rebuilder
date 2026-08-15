@@ -146,6 +146,25 @@ class GuiControllerTests(unittest.TestCase):
         self.assertEqual(layout_progress["page_current"], 100)
         self.assertEqual(layout_progress["percent"], 80.0)
 
+    def test_heartbeat_marks_active_stage_as_alive_without_advancing_percent(self):
+        (self.input_dir / "sample.pdf").write_bytes(b"fixture")
+        controller = self.controller([sys.executable, "-c", "pass"])
+        with controller._lock:
+            controller._reset_file_progress(controller.list_inputs())
+            controller._consume_progress_text(
+                "[1/1] Start: sample.pdf\n"
+                "    Pages:  200\n"
+                "    [1/5] Running MinerU parser\n"
+                "    MinerU task chunk: original pages 1-60 (60 page(s))\n"
+                "[controller] MinerU still running: elapsed=5m00s, "
+                "no new output=4m30s\n"
+            )
+
+        progress = controller.status()["file_progress"][0]
+        self.assertEqual(progress["percent"], 0.1)
+        self.assertIn("已运行 5m00s", progress["stage"])
+        self.assertIn("静默 4m30s（进程存活）", progress["stage"])
+
     def test_tracks_paddleocr_page_progress(self):
         (self.input_dir / "sample.pdf").write_bytes(b"fixture")
         controller = self.controller([sys.executable, "-c", "pass"])
@@ -217,6 +236,20 @@ class GuiControllerTests(unittest.TestCase):
         self.assertEqual(summary, {"status": "completed"})
         self.assertEqual(controller.output_file("..%2Fsecret.pdf"), None)
 
+    def test_stale_running_summary_is_reported_as_interrupted(self):
+        self.summary_path.parent.mkdir()
+        self.summary_path.write_text(
+            json.dumps({"status": "running", "counts": {}}),
+            encoding="utf-8",
+        )
+        controller = self.controller([sys.executable, "-c", "pass"])
+
+        summary = controller.read_summary()
+
+        self.assertEqual(summary["status"], "interrupted")
+        self.assertTrue(summary["stale_running"])
+        self.assertIn("没有任务进程或任务锁", summary["interrupted_reason"])
+
     @unittest.skipUnless(os.name == "posix", "safe interrupt uses POSIX process groups")
     def test_stop_interrupts_running_controller(self):
         (self.input_dir / "sample.pdf").write_bytes(b"fixture")
@@ -227,7 +260,7 @@ class GuiControllerTests(unittest.TestCase):
         controller.stop()
         self.wait_until_finished(controller)
 
-        self.assertEqual(controller.status()["status"], "failed")
+        self.assertEqual(controller.status()["status"], "interrupted")
         self.assertIn("正在请求安全停止", controller.log_since(0)["text"])
 
     @unittest.skipUnless(os.name == "posix", "descendant cleanup uses POSIX groups")

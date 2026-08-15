@@ -23,6 +23,7 @@ import webbrowser
 
 from .process_control import LiveProcessController
 from .signal_cleanup import termination_raises_keyboard_interrupt
+from .task_lock import task_lock_is_held
 
 
 DEFAULT_RUNTIME_ROOT = Path(
@@ -250,6 +251,23 @@ class GuiController:
         if record is None:
             return
 
+        match = re.search(
+            r"^\[controller\]\s+.+? still running: "
+            r"elapsed=([^,]+), no new output=(.+)$",
+            line,
+        )
+        if match:
+            stage = str(record.get("stage") or "OCR 子进程")
+            stage = stage.split(" · 已运行 ", 1)[0]
+            self._set_progress(
+                record,
+                stage=(
+                    f"{stage} · 已运行 {match.group(1)}，"
+                    f"静默 {match.group(2)}（进程存活）"
+                ),
+            )
+            return
+
         match = re.search(r"Pages:\s+(\d+)", line)
         if match:
             self._set_progress(record, page_total=int(match.group(1)))
@@ -445,6 +463,19 @@ class GuiController:
         if not isinstance(payload, dict):
             return None
         payload.pop("_checkpoint_sha256", None)
+        process = self._process
+        controller_running = process is not None and process.poll() is None
+        task_lock_path = self.input_dir.parent / "tmp/ocr_pdf_rebuilder/task.lock"
+        if (
+            payload.get("status") == "running"
+            and not controller_running
+            and not task_lock_is_held(task_lock_path)
+        ):
+            payload["status"] = "interrupted"
+            payload["stale_running"] = True
+            payload["interrupted_reason"] = (
+                "摘要遗留为 running，但当前没有任务进程或任务锁"
+            )
         return payload
 
     def start(self, pipeline: str = "mineru") -> None:
@@ -514,9 +545,15 @@ class GuiController:
 
         with self._lock:
             if self._process is process:
+                was_stopping = self._status == "stopping"
                 self._returncode = returncode
                 self._finished_at = time.time()
-                self._status = "completed" if returncode == 0 else "failed"
+                if returncode == 0:
+                    self._status = "completed"
+                elif was_stopping or returncode in (130, -signal.SIGINT):
+                    self._status = "interrupted"
+                else:
+                    self._status = "failed"
                 self._process = None
                 self._process_group_id = None
                 record = self._progress_record()
@@ -530,9 +567,20 @@ class GuiController:
                             percent=100.0,
                             page_current=total if isinstance(total, int) else None,
                         )
+                    elif self._status == "interrupted":
+                        self._set_progress(
+                            record,
+                            status="interrupted",
+                            stage="已安全停止",
+                        )
                     else:
                         self._set_progress(record, status="failed", stage="任务异常结束")
-        label = "正常完成" if returncode == 0 else f"结束，退出码={returncode}"
+        if returncode == 0:
+            label = "正常完成"
+        elif self._status == "interrupted":
+            label = f"已安全停止，退出码={returncode}"
+        else:
+            label = f"结束，退出码={returncode}"
         self._append_log(f"\n[GUI] 任务{label}\n")
 
     def stop(self) -> None:
@@ -697,7 +745,7 @@ HTML_PAGE = r"""<!doctype html>
       <label class="path" for="pipeline">主识别管线</label>
       <select id="pipeline"><option value="mineru">MinerU</option><option value="paddle">PaddleOCR-VL</option></select>
       <div class="actions"><button id="start">开始生成</button><button id="stop" class="secondary">安全停止</button></div>
-      <div class="hint">每次处理输入目录中的全部 PDF；已完成且完整性匹配的文件会复用检查点。</div>
+      <div class="hint">每次处理输入目录中的全部 PDF；已完成且完整性匹配的文件会复用检查点。MinerU 首次加载模型及单个分块推理可能数分钟不输出页码；实时日志每 30 秒显示一次“进程存活”心跳，请勿仅因进度条暂时不动而重启。</div>
       <div id="message" class="message"></div>
     </div>
     <div class="card">
@@ -727,20 +775,20 @@ const csrf = __CSRF_TOKEN__;
 let logOffset = 0, runId = null;
 const $ = id => document.getElementById(id);
 const fmtSize = n => n < 1048576 ? `${(n/1024).toFixed(1)} KB` : `${(n/1048576).toFixed(1)} MB`;
-const labels = {idle:'空闲',starting:'正在启动',running:'正在生成',stopping:'正在安全停止',completed:'已完成',failed:'已结束（有错误）'};
+const labels = {idle:'空闲',starting:'正在启动',running:'正在生成',stopping:'正在安全停止',completed:'已完成',interrupted:'已安全停止',failed:'已结束（有错误）'};
 function renderFiles(id, files, downloadable=false) {
   const target=$(id); target.textContent='';
   if (!files.length) { const d=document.createElement('div'); d.className='empty'; d.textContent='暂无 PDF'; target.append(d); return; }
   files.forEach(file => { const li=document.createElement('li'); const name=document.createElement(downloadable?'a':'span'); name.textContent=file.name; if(downloadable) name.href=file.download_url; const size=document.createElement('span'); size.className='path'; size.textContent=fmtSize(file.size); li.append(name,size); target.append(li); });
 }
 function renderSummary(summary) {
-  const counts=(summary&&summary.counts)||{}; const values=[['状态',summary?summary.status:'暂无'],['已完成',counts.completed||0],['已跳过',counts.skipped||0],['失败',counts.failed||0]];
+  const counts=(summary&&summary.counts)||{}; const values=[['状态',summary?summary.status:'暂无'],['已完成',counts.completed||0],['已跳过',counts.skipped||0],['中断',counts.interrupted||0],['失败',counts.failed||0]];
   $('summary').textContent=''; values.forEach(([k,v])=>{const d=document.createElement('div');d.className='metric';const s=document.createElement('span');s.className='path';s.textContent=k;const b=document.createElement('b');b.textContent=v;d.append(s,b);$('summary').append(d);});
 }
 function renderFileProgress(files) {
   const target=$('fileProgress'); target.textContent='';
   if (!files.length) { const d=document.createElement('div'); d.className='empty'; d.textContent='任务尚未启动'; target.append(d); return; }
-  const stateLabels={pending:'等待',running:'处理中',completed:'完成',skipped:'复用',failed:'失败'};
+  const stateLabels={pending:'等待',running:'处理中',completed:'完成',skipped:'复用',interrupted:'已停止',failed:'失败'};
   files.forEach(file=>{
     const item=document.createElement('div'); item.className='progress-item '+file.status;
     const head=document.createElement('div'); head.className='progress-head';

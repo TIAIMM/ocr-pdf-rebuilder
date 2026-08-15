@@ -132,6 +132,7 @@ def run_live_process(
     stream_to_console=True,
     timeout_seconds=MINERU_PROCESS_TIMEOUT_SECONDS,
     idle_timeout_seconds=MINERU_PROCESS_IDLE_TIMEOUT_SECONDS,
+    heartbeat_seconds=OCR_PROCESS_HEARTBEAT_SECONDS,
     termination_grace_seconds=MINERU_PROCESS_TERMINATE_GRACE_SECONDS,
     process_label="MinerU",
 ):
@@ -142,6 +143,7 @@ def run_live_process(
         stream_to_console=stream_to_console,
         timeout_seconds=timeout_seconds,
         idle_timeout_seconds=idle_timeout_seconds,
+        heartbeat_seconds=heartbeat_seconds,
         termination_grace_seconds=termination_grace_seconds,
     )
 

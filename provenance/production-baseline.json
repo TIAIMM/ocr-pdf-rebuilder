@@ -1,13 +1,13 @@
 {
   "schema": 2,
-  "captured_at": "2026-08-14T09:52:39.674917+00:00",
+  "captured_at": "2026-08-15T14:02:57.569172+00:00",
   "repository_path": "src/ocr_pdf_rebuilder",
   "package_identity": {
     "schema": 1,
     "algorithm": "sha256-canonical-file-manifest-v1",
     "package": "ocr_pdf_rebuilder",
     "file_count": 25,
-    "files_sha256": "5f99b9e606e9a3fb042ed78059eefd7ce027c65c97e0784b073beea7dfdd3cbe",
+    "files_sha256": "fd5eed62e229cc54a10cb3bf5a9f18615e94fd04266beebe6e83dab3a76c5d82",
     "files": [
       {
         "path": "__init__.py",
@@ -16,8 +16,8 @@
       },
       {
         "path": "batch_runner.py",
-        "size": 5290,
-        "sha256": "26284f66de19d0926dc24b61603c92d7c9be3d34149a9ebb6de7e2dbb753dc06"
+        "size": 7139,
+        "sha256": "382c7fc90ab5fb47f135d573e3044935cc02c85191219c32e884977f9070bbe9"
       },
       {
         "path": "code_identity.py",
@@ -36,8 +36,8 @@
       },
       {
         "path": "gui.py",
-        "size": 41589,
-        "sha256": "1440f5e18636e4003be4d9e7aad4591aded30bc8318d3d1f499b3f6a17ecd12b"
+        "size": 43721,
+        "sha256": "1f05a0a93f3c8154279d361085fcc6df65308f294d14f032718bfadc49675011"
       },
       {
         "path": "layout_engine.py",
@@ -86,8 +86,8 @@
       },
       {
         "path": "pipeline_config.py",
-        "size": 6370,
-        "sha256": "490c02d317b3a9aceeb1b43f2c844f60d5b0c8c933d16d15ce18593780d14e5d"
+        "size": 6405,
+        "sha256": "b444202684cdd59174df52bd0d55a22c85a5f4d0e06302f544388aa49801909d"
       },
       {
         "path": "pipeline_orchestrator.py",
@@ -96,13 +96,13 @@
       },
       {
         "path": "pipeline_runtime.py",
-        "size": 10061,
-        "sha256": "ab18130ab7f3cda192735e47db31fc3c0207a5c6f21b059d869c5d5b95b5e6b4"
+        "size": 10159,
+        "sha256": "db108cd220dde58cd900f5f9d027633fc6e528f39852a2df9ea6971f9fa555c8"
       },
       {
         "path": "process_control.py",
-        "size": 10786,
-        "sha256": "d1bb94a5db2f836fad41229e37fdbbafae9c5db77b8e530b328ffe8fee616f33"
+        "size": 11978,
+        "sha256": "debce48ce75ccd43ea27a73414498bb60ceafef3dcbc7997c7f8f7fdea16abd2"
       },
       {
         "path": "qc_reporting.py",
@@ -126,8 +126,8 @@
       },
       {
         "path": "task_lock.py",
-        "size": 3993,
-        "sha256": "63c9837cce3329a07e92dc32b0977ced08ae6aa605a9b6541a7ff108b0138961"
+        "size": 4578,
+        "sha256": "ea42ea701a7e7f65bc7590c8ce02b16f1b1a42b21b8b6965567076ac02cc00be"
       },
       {
         "path": "text_processing.py",

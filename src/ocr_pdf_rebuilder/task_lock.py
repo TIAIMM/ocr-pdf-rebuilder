@@ -15,6 +15,25 @@ class TaskLockBusyError(RuntimeError):
     """Raised when another OCR batch owns the runtime lock."""
 
 
+def task_lock_is_held(path: Path) -> bool:
+    """Return whether another open file description owns the POSIX task lock."""
+
+    if os.name != "posix" or not Path(path).is_file():
+        return False
+    import fcntl
+
+    try:
+        with Path(path).open("r", encoding="utf-8") as stream:
+            try:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        return False
+    return False
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -127,4 +146,4 @@ class CrossProcessTaskLock:
                 self._stream = None
 
 
-__all__ = ["CrossProcessTaskLock", "TaskLockBusyError"]
+__all__ = ["CrossProcessTaskLock", "TaskLockBusyError", "task_lock_is_held"]

@@ -70,6 +70,16 @@ worker/server cleanup can run. Closing the GUI terminal also requests cleanup;
 after 30 seconds it escalates termination. Wait for the status to leave
 “正在安全停止” before closing the GUI terminal when practical.
 
+MinerU model initialization and one 60-page inference chunk may produce no
+page-level output for several minutes. The controller emits
+`[controller] ... still running` every 30 seconds during such a silent interval;
+this heartbeat is displayed in the active GUI stage but does not advance the
+percentage or reset the 20-minute idle timeout. Do not restart solely because
+the page counter is unchanged while heartbeats continue. A safe or terminal
+interrupt writes batch status `interrupted` and preserves only checkpoints for
+chunks that completed before the interrupt. MinerU cannot resume inside an
+unfinished engine invocation, so that chunk starts again on the next run.
+
 ## Acceptance
 
 - batch summary reaches `completed` or the failed files are explicitly handled;
@@ -96,6 +106,8 @@ after 30 seconds it escalates termination. Wait for the status to leave
   clipping text or aborting the batch. This all-block preflight applies to both
   MinerU and PaddleOCR-VL, not only to tables;
 - no MinerU, Paddle worker or Paddle vLLM process group remains;
+- a manually stopped batch has status `interrupted`, a non-null `finished_at`,
+  and no live task lock;
 - completed-state reuse succeeds on an unchanged rerun.
 - a source-code change rejects old intermediate checkpoints and completion
   markers until the affected document is regenerated.

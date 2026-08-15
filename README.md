@@ -206,8 +206,13 @@ process-group cleanup when stopped, displays `batch_summary.json`, and offers ge
 for download. Per-file progress shows the active stage, weighted total percent,
 and current/total page count. Stage 4 reports every page while rendering and
 validating both the text-only artifact and any image variant, so a long final
-build no longer appears stalled. It binds to localhost by default and has no
-upload or delete operation.
+build no longer appears stalled. During a silent OCR subprocess interval, the
+log emits a liveness heartbeat every 30 seconds and the active file stage shows
+that the process is alive without falsely advancing its percentage. A manual
+stop finalizes the batch summary as `interrupted`; completed chunk checkpoints
+remain reusable, but an unfinished MinerU chunk must restart from that chunk's
+first page. The GUI binds to localhost by default and has no upload or delete
+operation.
 
 ## License
 

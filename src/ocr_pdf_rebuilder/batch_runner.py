@@ -52,6 +52,11 @@ class PdfBatchRunner:
             key: sum(1 for result in results if result.get("status") == key)
             for key in ("completed", "skipped", "failed")
         }
+        interrupted = sum(
+            1 for result in results if result.get("status") == "interrupted"
+        )
+        if interrupted:
+            counts["interrupted"] = interrupted
         payload = {
             "schema": 1,
             "status": status,
@@ -99,32 +104,75 @@ class PdfBatchRunner:
         started_at = time.time()
         results = []
         self.write_summary(started_at, pdfs, results, "running")
-        for index, pdf_path in enumerate(pdfs, 1):
-            file_start = time.monotonic()
-            try:
-                result = self.process_pdf(pdf_path, index, len(pdfs)) or {
-                    "status": "completed"
-                }
-                result = dict(result)
-                result["input_pdf"] = str(pdf_path)
-                result["elapsed_seconds"] = round(time.monotonic() - file_start, 3)
-            except Exception as exc:
-                error_text = f"{type(exc).__name__}: {exc}"
-                traceback_text = traceback.format_exc()
-                self.logger(f"[{index}/{len(pdfs)}] FAILED: {pdf_path.name}: {error_text}")
-                self.logger(traceback_text.rstrip())
-                result = {
-                    "status": "failed",
-                    "input_pdf": str(pdf_path),
-                    "error": error_text,
-                    "traceback": traceback_text,
-                    "log_path": str(
-                        self.log_dir / f"{pdf_path.stem}_{self.log_suffix}.log"
-                    ),
-                    "elapsed_seconds": round(time.monotonic() - file_start, 3),
-                }
-            results.append(result)
-            self.write_summary(started_at, pdfs, results, "running")
+        active_pdf: Path | None = None
+        active_start: float | None = None
+        try:
+            for index, pdf_path in enumerate(pdfs, 1):
+                active_pdf = pdf_path
+                active_start = time.monotonic()
+                try:
+                    result = self.process_pdf(pdf_path, index, len(pdfs)) or {
+                        "status": "completed"
+                    }
+                    result = dict(result)
+                    result["input_pdf"] = str(pdf_path)
+                    result["elapsed_seconds"] = round(
+                        time.monotonic() - active_start, 3
+                    )
+                except Exception as exc:
+                    error_text = f"{type(exc).__name__}: {exc}"
+                    traceback_text = traceback.format_exc()
+                    self.logger(
+                        f"[{index}/{len(pdfs)}] FAILED: {pdf_path.name}: {error_text}"
+                    )
+                    self.logger(traceback_text.rstrip())
+                    result = {
+                        "status": "failed",
+                        "input_pdf": str(pdf_path),
+                        "error": error_text,
+                        "traceback": traceback_text,
+                        "log_path": str(
+                            self.log_dir / f"{pdf_path.stem}_{self.log_suffix}.log"
+                        ),
+                        "elapsed_seconds": round(
+                            time.monotonic() - active_start, 3
+                        ),
+                    }
+                results.append(result)
+                active_pdf = None
+                active_start = None
+                self.write_summary(started_at, pdfs, results, "running")
+        except BaseException as exc:
+            if active_pdf is not None and active_start is not None:
+                error_text = type(exc).__name__
+                if str(exc):
+                    error_text += f": {exc}"
+                results.append(
+                    {
+                        "status": "interrupted",
+                        "input_pdf": str(active_pdf),
+                        "error": error_text,
+                        "log_path": str(
+                            self.log_dir
+                            / f"{active_pdf.stem}_{self.log_suffix}.log"
+                        ),
+                        "elapsed_seconds": round(
+                            time.monotonic() - active_start, 3
+                        ),
+                    }
+                )
+            summary_path, _summary = self.write_summary(
+                started_at,
+                pdfs,
+                results,
+                "interrupted",
+                finished_at=time.time(),
+            )
+            self.logger(
+                "Batch interrupted; completed chunk checkpoints remain reusable"
+            )
+            self.logger(f"Batch summary: {summary_path}")
+            raise
 
         failed = [result for result in results if result.get("status") == "failed"]
         final_status = "completed_with_failures" if failed else "completed"

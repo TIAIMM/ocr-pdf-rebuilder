@@ -59,6 +59,32 @@ class BatchAndProcessStabilityTests(unittest.TestCase):
         self.assertEqual(summary["status"], "completed_with_failures")
         self.assertEqual(summary["counts"], {"completed": 2, "skipped": 0, "failed": 1})
 
+    def test_manual_interrupt_finalizes_summary_as_interrupted(self):
+        input_dir = self.root / "input"
+        input_dir.mkdir()
+        input_pdf = input_dir / "book.pdf"
+        input_pdf.write_bytes(b"fixture")
+        log_dir = self.root / "logs"
+        runner = PdfBatchRunner(
+            input_dir=input_dir,
+            output_dir=self.root / "output",
+            mineru_output_dir=self.root / "raw",
+            log_dir=log_dir,
+            process_pdf=mock.Mock(side_effect=KeyboardInterrupt),
+            write_checkpoint=self.pipeline.write_checkpoint,
+            logger=lambda _message: None,
+        )
+
+        with self.assertRaises(KeyboardInterrupt):
+            runner.run()
+
+        summary = self.pipeline.read_checkpoint(log_dir / "batch_summary.json")
+        self.assertEqual(summary["status"], "interrupted")
+        self.assertIsNotNone(summary["finished_at"])
+        self.assertEqual(summary["processed_files"], 1)
+        self.assertEqual(summary["counts"]["interrupted"], 1)
+        self.assertEqual(summary["results"][0]["status"], "interrupted")
+
     @unittest.skipUnless(os.name == "posix", "advisory file locking requires POSIX")
     def test_task_lock_rejects_a_second_process_and_recovers_after_release(self):
         lock_path = self.root / "runtime/tmp/ocr_pdf_rebuilder/task.lock"
@@ -237,6 +263,25 @@ class BatchAndProcessStabilityTests(unittest.TestCase):
             time.sleep(0.1)
         else:
             self.fail(f"descendant process {child_pid} survived normal parent exit")
+
+    def test_silent_live_process_emits_heartbeat(self):
+        log_path = self.root / "heartbeat.log"
+        returncode = self.pipeline.run_live_process(
+            [sys.executable, "-c", "import time; time.sleep(0.3)"],
+            self.root,
+            log_path,
+            stream_to_console=False,
+            timeout_seconds=2,
+            idle_timeout_seconds=None,
+            heartbeat_seconds=0.05,
+            termination_grace_seconds=0.2,
+            process_label="test worker",
+        )
+
+        self.assertEqual(returncode, 0)
+        log_text = log_path.read_text(encoding="utf-8")
+        self.assertIn("[controller] test worker still running:", log_text)
+        self.assertIn("no new output=", log_text)
 
     def test_transient_exhaustion_does_not_create_split_checkpoint(self):
         source = self.root / "source.pdf"

@@ -14,6 +14,17 @@ import threading
 import time
 
 
+def _format_duration(seconds: float) -> str:
+    total_seconds = max(0, int(seconds))
+    minutes, second = divmod(total_seconds, 60)
+    hours, minute = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{minute:02d}m{second:02d}s"
+    if minutes:
+        return f"{minutes}m{second:02d}s"
+    return f"{second}s"
+
+
 class LiveProcessController:
     """Run a streaming subprocess and guarantee descendant cleanup on failure."""
 
@@ -132,6 +143,7 @@ class LiveProcessController:
         stream_to_console: bool,
         timeout_seconds: float | None,
         idle_timeout_seconds: float | None,
+        heartbeat_seconds: float | None,
         termination_grace_seconds: float,
     ) -> int:
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -161,6 +173,7 @@ class LiveProcessController:
             last_flush = time.monotonic()
             started_at = last_flush
             last_activity = last_flush
+            last_heartbeat = last_flush
             parent_exit_seen_at = None
             stdout_open = True
 
@@ -247,6 +260,20 @@ class LiveProcessController:
                                 termination_grace_seconds,
                             )
                             raise RuntimeError(message)
+                        if (
+                            heartbeat_seconds is not None
+                            and heartbeat_seconds > 0
+                            and now - last_activity >= heartbeat_seconds
+                            and now - last_heartbeat >= heartbeat_seconds
+                        ):
+                            append_output(
+                                "\n[controller] "
+                                f"{self.process_label} still running: "
+                                f"elapsed={_format_duration(now - started_at)}, "
+                                f"no new output={_format_duration(now - last_activity)}\n"
+                            )
+                            flush_pending(force=True)
+                            last_heartbeat = now
 
                     events = selector.select(timeout=0.25) if stdout_open else []
                     if events:

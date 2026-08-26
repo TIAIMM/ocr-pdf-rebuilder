@@ -26,6 +26,7 @@ from ocr_pdf_rebuilder import (
     qc_reporting,
     reportlab_renderer,
     runtime_state,
+    searchable_pdf,
     text_processing,
 )
 from support import load_pipeline
@@ -50,6 +51,7 @@ class PipelineModuleBoundaryTests(unittest.TestCase):
             "qc_reporting.py",
             "reportlab_renderer.py",
             "runtime_state.py",
+            "searchable_pdf.py",
             "text_processing.py",
         ):
             source = (package_dir / name).read_text(encoding="utf-8")
@@ -79,6 +81,7 @@ class PipelineModuleBoundaryTests(unittest.TestCase):
             reportlab_renderer,
             qc_reporting,
             runtime_state,
+            searchable_pdf,
             pipeline_orchestrator,
         )
         for module in modules:

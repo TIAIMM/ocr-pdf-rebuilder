@@ -14,6 +14,7 @@ if __package__:
     from . import qc_reporting as _qc_reporting
     from . import reportlab_renderer as _reportlab_renderer
     from . import runtime_state as _runtime_state
+    from . import searchable_pdf as _searchable_pdf
     from . import text_processing as _text_processing
     from .component_runtime import install_component
     from .forward_page_leak import ForwardPageLeakAnalyzer, ForwardPageLeakConfig
@@ -36,6 +37,7 @@ else:  # Support direct file loading used by diagnostics and the test harness.
     import ocr_pdf_rebuilder.qc_reporting as _qc_reporting
     import ocr_pdf_rebuilder.reportlab_renderer as _reportlab_renderer
     import ocr_pdf_rebuilder.runtime_state as _runtime_state
+    import ocr_pdf_rebuilder.searchable_pdf as _searchable_pdf
     import ocr_pdf_rebuilder.text_processing as _text_processing
     from ocr_pdf_rebuilder.component_runtime import install_component
     from ocr_pdf_rebuilder.forward_page_leak import (
@@ -150,11 +152,13 @@ def run_live_process(
 install_component(_runtime_state, globals())
 install_component(_mineru_runner, globals())
 
-def render_pdf_page_to_png(pdf_path, page_index, image_path):
+def render_pdf_page_to_png(pdf_path, page_index, image_path, rotation_degrees=0):
     image_path.parent.mkdir(parents=True, exist_ok=True)
     with fitz.open(pdf_path) as doc:
         page = doc[page_index]
-        matrix = fitz.Matrix(DPI / 72, DPI / 72)
+        matrix = fitz.Matrix(DPI / 72, DPI / 72).prerotate(
+            int(rotation_degrees or 0) % 360
+        )
         pix = page.get_pixmap(matrix=matrix, alpha=False)
         pix.save(str(image_path))
 
@@ -305,5 +309,7 @@ def warn_pdf_suspected_markdown(pdf_path, validation_scan=None):
 
 
 install_component(_qc_reporting, globals())
+
+install_component(_searchable_pdf, globals())
 
 install_component(_pipeline_orchestrator, globals())

@@ -88,6 +88,7 @@ def process_pdf(pdf_path, index, total):
     output_image_pdf = OUTPUT_DIR / f"{name}_mineru_with_images.pdf"
     output_md = OUTPUT_DIR / f"{name}_mineru.md"
     output_version = OUTPUT_DIR / f"{name}_mineru.version"
+    output_searchable_pdf = OUTPUT_DIR / f"{name}_mineru_searchable.pdf"
     if (
         SKIP_EXISTING
         and completed_output_state_matches(
@@ -96,6 +97,7 @@ def process_pdf(pdf_path, index, total):
             output_pdf,
             output_md,
             output_image_pdf,
+            output_searchable_pdf,
         )
     ):
         if upgrade_completed_output_runtime_identity(output_version):
@@ -110,6 +112,7 @@ def process_pdf(pdf_path, index, total):
             "status": "skipped",
             "output_text_pdf": str(output_pdf),
             "output_image_pdf": str(output_image_pdf) if state.get("has_image_variant") else None,
+            "output_searchable_pdf": str(output_searchable_pdf) if state.get("searchable_pdf") else None,
         }
     elif SKIP_EXISTING and output_pdf.exists():
         log(f"[{index}/{total}] Existing output is missing current version marker; regenerating: {output_pdf}")
@@ -332,6 +335,29 @@ def process_pdf(pdf_path, index, total):
         output_image_pdf.unlink()
         log(f"    Removed stale image variant because this run has no fallback pages: {output_image_pdf}")
 
+    log(f"    Rendering searchable OCR-layer PDF: {output_searchable_pdf}")
+    searchable_stats = build_searchable_pdf(
+        pdf_path,
+        page_results,
+        output_searchable_pdf,
+        progress_callback=lambda current, total: log(
+            f"        Searchable PDF page {current}/{total}"
+        ),
+    )
+    searchable_validation_scan = scan_pdf_validation(
+        output_searchable_pdf,
+        progress_callback=lambda current, total: log(
+            f"        Validate searchable PDF page {current}/{total}"
+        ),
+    )
+    validate_pdf_page_count(output_searchable_pdf, page_count, searchable_validation_scan)
+    validate_searchable_pdf_text_presence(
+        output_searchable_pdf,
+        searchable_stats["text_page_indexes"],
+        searchable_validation_scan,
+    )
+    validate_searchable_pdf_visual_identity(pdf_path, output_searchable_pdf)
+
     write_mineru_qc_report(
         pdf_path,
         mineru_dir,
@@ -339,6 +365,7 @@ def process_pdf(pdf_path, index, total):
         page_specs,
         output_pdf,
         output_image_pdf=output_image_pdf if image_fallback_pages else None,
+        output_searchable_pdf=output_searchable_pdf,
         image_fallback_pages=image_fallback_pages,
         parser_runs=parser_runs,
         output_validation_scan=output_validation_scan,
@@ -357,6 +384,11 @@ def process_pdf(pdf_path, index, total):
             f"    Saved image variant: {output_image_pdf} ({image_size_mb:.2f} MB), "
             f"fallback_pages={len(image_fallback_pages)}"
         )
+    searchable_size_mb = output_searchable_pdf.stat().st_size / 1024 / 1024
+    log(
+        f"    Saved searchable variant: {output_searchable_pdf} ({searchable_size_mb:.2f} MB), "
+        f"text_pages={len(searchable_stats['text_page_indexes'])}, spans={searchable_stats['spans_placed']}"
+    )
     log(f"    Saved Markdown: {output_md}")
     write_completed_output_state(
         output_version,
@@ -364,6 +396,7 @@ def process_pdf(pdf_path, index, total):
         output_pdf,
         output_md,
         output_image_pdf,
+        output_searchable_pdf,
         image_fallback_pages,
     )
 
@@ -376,6 +409,7 @@ def process_pdf(pdf_path, index, total):
         "status": "completed",
         "output_text_pdf": str(output_pdf),
         "output_image_pdf": str(output_image_pdf) if image_fallback_pages else None,
+        "output_searchable_pdf": str(output_searchable_pdf),
         "image_fallback_pages": [page_index + 1 for page_index in image_fallback_pages],
     }
 

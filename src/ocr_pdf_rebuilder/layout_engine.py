@@ -114,6 +114,78 @@ def blocks_from_page_result(result, page_width, page_height):
     return blocks
 
 
+SOURCE_TEXT_ROTATION_MIN_HORIZONTAL_LINES = 3
+SOURCE_TEXT_ROTATION_MIN_WEIGHT = 24
+SOURCE_TEXT_ROTATION_DOMINANCE_RATIO = 0.75
+
+
+def source_page_text_rotation_degrees(page):
+    """Detect a physically inverted source page from its OCR text direction.
+
+    A scanned page can be upside down while carrying a hidden text layer whose
+    line direction is ``(-1, 0)``.  Paddle recognizes the glyphs upright but
+    reports boxes in the inverted raster coordinates, so the page must be
+    geometrically rotated before layout reconstruction.
+    """
+
+    forward_weight = 0
+    reverse_weight = 0
+    horizontal_lines = 0
+    for block in page.get_text("dict").get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            direction = line.get("dir") or (1.0, 0.0)
+            if len(direction) < 2:
+                continue
+            direction_x = float(direction[0])
+            direction_y = float(direction[1])
+            if abs(direction_y) > 0.20 or abs(direction_x) < 0.90:
+                continue
+            text = "".join(
+                str(span.get("text", "")) for span in line.get("spans", [])
+            ).strip()
+            if not text:
+                continue
+            weight = max(1, len(re.sub(r"\s+", "", text)))
+            horizontal_lines += 1
+            if direction_x < 0.0:
+                reverse_weight += weight
+            else:
+                forward_weight += weight
+
+    total_weight = forward_weight + reverse_weight
+    if (
+        horizontal_lines >= SOURCE_TEXT_ROTATION_MIN_HORIZONTAL_LINES
+        and reverse_weight >= SOURCE_TEXT_ROTATION_MIN_WEIGHT
+        and reverse_weight / max(1, total_weight)
+        >= SOURCE_TEXT_ROTATION_DOMINANCE_RATIO
+    ):
+        return 180
+    return 0
+
+
+def rotate_blocks_for_source_orientation(
+    blocks, page_width, page_height, rotation_degrees
+):
+    """Move OCR boxes into the readable orientation of an inverted page."""
+
+    if int(rotation_degrees or 0) % 360 != 180:
+        return blocks
+    for block in blocks:
+        old_left = float(block["left"])
+        old_top = float(block["top"])
+        width = float(block["width"])
+        height = float(block["height"])
+        block["left"] = max(0.0, page_width - (old_left + width))
+        block["top"] = max(0.0, page_height - (old_top + height))
+        # Structured line boxes are expressed in the old absolute coordinate
+        # system.  The block text remains safe and preserves recognition.
+        block["line_info"] = []
+        block["source_orientation_correction_degrees"] = 180
+    return blocks
+
+
 def has_cjk(text):
     return bool(re.search(r"[\u3400-\u9fff]", text or ""))
 
@@ -574,12 +646,26 @@ def block_bottom(block):
 
 
 TEXT_MERGE_CATEGORIES = {"Text", "List-item"}
+MIN_EXACT_TEXT_OVERLAP_CHARS = 24
 
 
 def dedupe_text_key(text):
     text = normalize_text(text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
+
+
+def join_deduplicated_text(base, suffix):
+    suffix = suffix.lstrip()
+    if not suffix:
+        return base.strip()
+    if suffix[0] in ".,;:!?":
+        if base.rstrip().endswith(tuple(".,;:!?")):
+            base = base.rstrip()[:-1].rstrip()
+        return (base.rstrip() + suffix).strip()
+    if suffix[0] in "”»\"')]}":
+        return (base.rstrip() + suffix).strip()
+    return (base.rstrip() + " " + suffix).strip()
 
 
 def append_text_with_overlap(base, addition):
@@ -606,9 +692,9 @@ def append_text_with_overlap(base, addition):
     max_k = min(len(base_norm), len(add_norm), 1400)
 
     # Exact suffix-prefix overlap.
-    for k in range(max_k, 39, -1):
+    for k in range(max_k, MIN_EXACT_TEXT_OVERLAP_CHARS - 1, -1):
         if base_norm[-k:] == add_norm[:k]:
-            return (base_norm + " " + add_norm[k:].lstrip()).strip()
+            return join_deduplicated_text(base_norm, add_norm[k:])
 
     # Fuzzy overlap for OCR differences, hyphenation differences and line breaks.
     tail = base_norm[-1400:]
@@ -627,7 +713,7 @@ def append_text_with_overlap(base, addition):
 
     if best is not None:
         cut = best.b + best.size
-        return (base_norm + " " + add_norm[cut:].lstrip()).strip()
+        return join_deduplicated_text(base_norm, add_norm[cut:])
 
     return (base_norm + " " + add_norm).strip()
 
@@ -641,7 +727,7 @@ def text_overlap_like(a, b):
         return True
     merged = append_text_with_overlap(a_norm, b_norm)
     naive = (a_norm + " " + b_norm).strip()
-    return len(merged) <= len(naive) - 40
+    return len(merged) <= len(naive) - MIN_EXACT_TEXT_OVERLAP_CHARS
 
 
 def retry_blocks_should_merge(a, b):
@@ -718,6 +804,1003 @@ def merge_overlapping_retry_blocks(blocks):
     for index, block in enumerate(ordered):
         block["order"] = index
     return ordered
+
+
+def duplicate_ocr_blocks_should_merge(a, b):
+    """Return true only for geometrically overlapping blocks sharing real text.
+
+    PaddleOCR can emit a long paragraph and a second block that repeats its
+    final line with a short continuation.  Unlike split-band retry merging,
+    this deliberately requires textual overlap and ignores short margin
+    markers so line numbers are never folded into body text.
+    """
+
+    if a.get("category") not in TEXT_MERGE_CATEGORIES:
+        return False
+    if b.get("category") not in TEXT_MERGE_CATEGORIES:
+        return False
+    if min(
+        len(dedupe_text_key(a.get("text", ""))),
+        len(dedupe_text_key(b.get("text", ""))),
+    ) < MIN_EXACT_TEXT_OVERLAP_CHARS:
+        return False
+    if horizontal_overlap_ratio(a, b) < 0.20:
+        return False
+    vertical_overlap = min(block_bottom(a), block_bottom(b)) - max(a["top"], b["top"])
+    if vertical_overlap <= 0.0:
+        return False
+    return text_overlap_like(a.get("text", ""), b.get("text", ""))
+
+
+def merge_overlapping_duplicate_ocr_blocks(blocks):
+    """Merge duplicate OCR fragments even when margin markers sit between them."""
+
+    ordered = sorted(
+        blocks,
+        key=lambda block: (
+            is_header_footer(block),
+            block["top"],
+            block["left"],
+            block.get("order", 0),
+        ),
+    )
+    changed = True
+    while changed:
+        changed = False
+        for left_index, left in enumerate(ordered):
+            for right_index in range(left_index + 1, len(ordered)):
+                right = ordered[right_index]
+                if duplicate_ocr_blocks_should_merge(left, right):
+                    merged = merge_retry_block_pair(left, right)
+                    merged["duplicate_ocr_blocks_merged"] = True
+                    ordered[left_index] = merged
+                    del ordered[right_index]
+                    changed = True
+                    break
+            if changed:
+                break
+
+    for index, block in enumerate(ordered):
+        block["order"] = index
+    return ordered
+
+
+FUZZY_DUPLICATE_MIN_KEY_CHARS = 12
+FUZZY_DUPLICATE_MAX_KEY_CHARS = 180
+FUZZY_DUPLICATE_MIN_LINE_SIMILARITY = 0.56
+FUZZY_DUPLICATE_MIN_ANCHORED_SIMILARITY = 0.78
+FUZZY_DUPLICATE_CATEGORIES = TEXT_MERGE_CATEGORIES | {"Section-header"}
+SUPERSCRIPT_DEDUPE_TRANSLATION = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹", "0123456789")
+LEADING_OCR_REFERENCE_RE = re.compile(
+    r"^\s*(?:[|1Il][bBdD])?\.?\s*(\d{2,4})(?:\.\d+)?(?=\D|$)"
+)
+
+
+def fuzzy_dedupe_text_key(text):
+    text = normalize_text(text).translate(SUPERSCRIPT_DEDUPE_TRANSLATION)
+    return re.sub(
+        r"[^0-9A-Za-zÀ-ÖØ-öø-ÿΑ-ω]+",
+        "",
+        text,
+    ).casefold()
+
+
+def leading_ocr_reference(text):
+    match = LEADING_OCR_REFERENCE_RE.match(normalize_text(text))
+    return match.group(1) if match else None
+
+
+def anchored_duplicate_short_block(short, long):
+    """Recognize a short alternate OCR reading contained in a long block.
+
+    Paddle can emit both a full Greek reference paragraph and a second,
+    heavily transliterated reading of its first line.  A shared leading
+    bibliographic anchor plus strong geometric containment is safer evidence
+    than script-dependent fuzzy matching.
+    """
+
+    short_spans = nonempty_line_spans(short.get("text", ""))
+    if not short_spans or len(short_spans) > 2:
+        return False
+    short_key = fuzzy_dedupe_text_key(short.get("text", ""))
+    long_key = fuzzy_dedupe_text_key(long.get("text", ""))
+    if len(short_key) < 12 or len(long_key) < len(short_key) * 2:
+        return False
+    reference = leading_ocr_reference(short.get("text", ""))
+    if not reference or reference != leading_ocr_reference(long.get("text", "")):
+        return False
+    if short["width"] < long["width"] * 0.55:
+        return False
+    if long["height"] < short["height"] * 1.75:
+        return False
+    if horizontal_overlap_ratio(short, long) < 0.65:
+        return False
+    vertical_overlap = min(block_bottom(short), block_bottom(long)) - max(
+        short["top"], long["top"]
+    )
+    return vertical_overlap / max(1.0, short["height"]) >= 0.50
+
+
+def nonempty_line_spans(text):
+    spans = []
+    offset = 0
+    for raw_line in str(text or "").splitlines(keepends=True):
+        line = raw_line.rstrip("\r\n")
+        stripped = line.strip()
+        if stripped:
+            start = offset + line.find(stripped)
+            spans.append((start, start + len(stripped), stripped))
+        offset += len(raw_line)
+    if not spans and str(text or "").strip():
+        stripped = str(text).strip()
+        start = str(text).find(stripped)
+        spans.append((start, start + len(stripped), stripped))
+    return spans
+
+
+def fuzzy_edge_candidates(long_text, short_line, edge):
+    long_text = str(long_text or "")
+    spans = nonempty_line_spans(long_text)
+    candidates = []
+    if edge == "start":
+        candidates.extend((start, end, value, "line") for start, end, value in spans[:2])
+    else:
+        candidates.extend((start, end, value, "line") for start, end, value in spans[-2:])
+
+    first_word = re.search(r"[A-Za-zÀ-ÖØ-öø-ÿΑ-ω]{4,}", short_line)
+    if first_word:
+        word = first_word.group(0)
+        matches = list(re.finditer(re.escape(word), long_text, flags=re.IGNORECASE))
+        if edge == "start":
+            for match in matches:
+                if match.start() <= max(120, len(long_text) * 0.25):
+                    candidates.append((0, min(len(long_text), match.start() + max(80, len(short_line) * 2)), long_text[: match.start() + max(80, len(short_line) * 2)], "anchor"))
+                    break
+        else:
+            for match in reversed(matches):
+                if match.start() >= len(long_text) * 0.35:
+                    candidates.append((match.start(), len(long_text), long_text[match.start() :], "anchor"))
+                    break
+    return candidates
+
+
+def remove_fuzzy_edge_duplicate_from_long_block(short, long):
+    short_spans = nonempty_line_spans(short.get("text", ""))
+    if not short_spans or len(short_spans) > 3:
+        return False
+
+    short_center = short["top"] + short["height"] * 0.5
+    long_center = long["top"] + long["height"] * 0.5
+    edge = "start" if short_center <= long_center else "end"
+    best = None
+    for _short_start, _short_end, short_line in short_spans:
+        short_key = fuzzy_dedupe_text_key(short_line)
+        if not (
+            FUZZY_DUPLICATE_MIN_KEY_CHARS
+            <= len(short_key)
+            <= FUZZY_DUPLICATE_MAX_KEY_CHARS
+        ):
+            continue
+        for start, end, candidate, candidate_kind in fuzzy_edge_candidates(
+            long.get("text", ""), short_line, edge
+        ):
+            candidate_key = fuzzy_dedupe_text_key(candidate)
+            if not candidate_key:
+                continue
+            similarity = SequenceMatcher(
+                None,
+                short_key,
+                candidate_key,
+                autojunk=False,
+            ).ratio()
+            threshold = (
+                FUZZY_DUPLICATE_MIN_ANCHORED_SIMILARITY
+                if candidate_kind == "anchor"
+                else FUZZY_DUPLICATE_MIN_LINE_SIMILARITY
+            )
+            if similarity < threshold:
+                continue
+            if best is None or similarity > best[0]:
+                best = (similarity, start, end, candidate_kind)
+
+    if best is None:
+        return False
+
+    _similarity, start, end, _candidate_kind = best
+    long_text = str(long.get("text", ""))
+    before = long_text[:start].rstrip()
+    after = long_text[end:].lstrip()
+    repaired = "\n".join(part for part in (before, after) if part).strip()
+    if not repaired or repaired == long_text.strip():
+        return False
+
+    old_top = float(long["top"])
+    old_bottom = block_bottom(long)
+    if edge == "start":
+        new_top = min(old_bottom - 1.0, max(old_top, block_bottom(short)))
+        long["top"] = new_top
+        long["height"] = old_bottom - new_top
+    else:
+        new_bottom = max(old_top + 1.0, min(old_bottom, float(short["top"])))
+        long["height"] = new_bottom - old_top
+    long["text"] = repaired
+    long["source_text"] = repaired
+    long["line_info"] = []
+    long["fuzzy_duplicate_ocr_lines_removed"] = int(
+        long.get("fuzzy_duplicate_ocr_lines_removed", 0)
+    ) + 1
+    return True
+
+
+def repair_overlapping_fuzzy_duplicate_ocr_lines(blocks):
+    """Remove a conflicting OCR edge line while retaining its better twin.
+
+    The short block is preserved because Paddle usually emits the corrected
+    line separately; only a geometrically overlapping first/last line of the
+    larger block is removed.  This also handles punctuation and superscript
+    variants that defeat exact substring merging.
+    """
+
+    ordered = list(blocks)
+    changed = True
+    while changed:
+        changed = False
+        for left_index, left in enumerate(ordered):
+            for right_index in range(left_index + 1, len(ordered)):
+                right = ordered[right_index]
+                if left.get("category") not in FUZZY_DUPLICATE_CATEGORIES:
+                    continue
+                if right.get("category") not in FUZZY_DUPLICATE_CATEGORIES:
+                    continue
+                if horizontal_overlap_ratio(left, right) < 0.20:
+                    continue
+                vertical_overlap = min(block_bottom(left), block_bottom(right)) - max(
+                    left["top"], right["top"]
+                )
+                if vertical_overlap <= 0.0:
+                    continue
+                if vertical_overlap / max(1.0, min(left["height"], right["height"])) < 0.20:
+                    continue
+
+                left_key = fuzzy_dedupe_text_key(left.get("text", ""))
+                right_key = fuzzy_dedupe_text_key(right.get("text", ""))
+                short, long = (left, right) if len(left_key) <= len(right_key) else (right, left)
+                if long.get("category") not in TEXT_MERGE_CATEGORIES:
+                    continue
+                if anchored_duplicate_short_block(short, long):
+                    long["anchored_duplicate_ocr_blocks_removed"] = int(
+                        long.get("anchored_duplicate_ocr_blocks_removed", 0)
+                    ) + 1
+                    del ordered[left_index if short is left else right_index]
+                    changed = True
+                    break
+                if remove_fuzzy_edge_duplicate_from_long_block(short, long):
+                    changed = True
+                    break
+            if changed:
+                break
+
+    for index, block in enumerate(
+        sorted(
+            ordered,
+            key=lambda item: (
+                is_header_footer(item),
+                item["top"],
+                item["left"],
+                item.get("order", 0),
+            ),
+        )
+    ):
+        block["order"] = index
+    return ordered
+
+
+def trim_small_adjacent_text_block_overlaps(blocks):
+    """Trim small same-column bbox intersections without deleting either text.
+
+    OCR line boxes often overlap by a few points even when the two blocks are
+    consecutive rather than duplicates. Keeping both bboxes unchanged makes
+    their final baselines collide. Only the earlier block's trailing bbox area
+    is trimmed; fit preflight still rejects text that genuinely cannot fit.
+    """
+
+    candidates = sorted(
+        blocks,
+        key=lambda item: (item["top"], item["left"], item.get("order", 0)),
+    )
+    for index, earlier in enumerate(candidates):
+        if earlier.get("category") not in TEXT_MERGE_CATEGORIES:
+            continue
+        if is_numeric_page_marker(clean_block_text(earlier)):
+            continue
+        earlier_lines = nonempty_line_spans(earlier.get("text", ""))
+        if len(earlier_lines) < 2:
+            continue
+        for later in candidates[index + 1 :]:
+            if later["top"] <= earlier["top"]:
+                continue
+            if later.get("category") not in TEXT_MERGE_CATEGORIES:
+                continue
+            if is_numeric_page_marker(clean_block_text(later)):
+                continue
+            later_lines = nonempty_line_spans(later.get("text", ""))
+            if len(later_lines) != 1:
+                continue
+            if len(fuzzy_dedupe_text_key(later_lines[0][2])) < 12:
+                continue
+            overlap = block_bottom(earlier) - later["top"]
+            if overlap < 2.5 or overlap > 6.0:
+                continue
+            if horizontal_overlap_ratio(earlier, later) < 0.50:
+                continue
+            if later["width"] < earlier["width"] * 0.45:
+                continue
+            if abs(later["left"] - earlier["left"]) > max(
+                earlier["width"], later["width"]
+            ) * 0.12:
+                continue
+            overlap_ratio = overlap / max(
+                1.0, min(earlier["height"], later["height"])
+            )
+            if not (0.20 <= overlap_ratio <= 0.55):
+                continue
+            earlier["height"] = max(1.0, later["top"] - earlier["top"])
+            earlier["adjacent_text_overlap_trimmed"] = True
+            break
+    return blocks
+
+
+STRETCHED_MARGIN_NUMBER_RE = re.compile(r"^\d{1,3}$")
+
+
+def stretched_margin_number_tokens(text):
+    """Return numeric tokens when a tall margin block contains only numbers.
+
+    Paddle may flatten a vertical run such as ``15`` / ``20`` into either
+    newline-separated text or the single string ``"15 20"``.  Treat both
+    encodings identically, while rejecting punctuation or surrounding prose.
+    """
+
+    raw = str(text or "").strip()
+    if not raw or re.sub(r"\d{1,3}|\s+", "", raw):
+        return []
+    tokens = re.findall(r"\d{1,3}", raw)
+    # Paddle occasionally duplicates every member of a vertical run before
+    # flattening it (for example ``20 20 / 25 25 / 30 30``).  Keep a bounded
+    # upper limit so prose-like numeric tables are still rejected, but allow
+    # enough tokens for these duplicated margin markers to reach the
+    # source-geometry restoration pass.
+    return tokens if 1 <= len(tokens) <= 12 else []
+
+
+def stretched_margin_numeric_block_side(block, page_width, page_height):
+    tokens = stretched_margin_number_tokens(block.get("text", ""))
+    if not (
+        block.get("category") in TEXT_MERGE_CATEGORIES
+        and tokens
+        and block["width"] <= page_width * 0.06
+        and block["height"] >= page_height * 0.25
+    ):
+        return None
+    if block["left"] + block["width"] <= page_width * 0.16:
+        return "left"
+    if block["left"] >= page_width * 0.84:
+        return "right"
+    return None
+
+
+def intended_stretched_margin_numbers(text):
+    numbers = set()
+    for token in stretched_margin_number_tokens(text):
+        value = int(token)
+        # Some scans append a detected rule/glyph to the real five-line
+        # marker: 151, 201, 251 are 15, 20, 25 respectively.
+        if value > 100 and token.endswith("1"):
+            shortened = int(token[:-1])
+            if 0 < shortened <= 100 and shortened % 5 == 0:
+                value = shortened
+        numbers.add(value)
+    return numbers
+
+
+def repair_stretched_margin_numeric_ocr_blocks(
+    blocks,
+    page_width,
+    page_height,
+    source_page=None,
+):
+    """Restore merged line-number runs from the source page's exact geometry."""
+
+    stretched = [
+        (block, stretched_margin_numeric_block_side(block, page_width, page_height))
+        for block in blocks
+    ]
+    stretched = [(block, side) for block, side in stretched if side]
+    if not stretched:
+        return blocks
+
+    ordinary_numbers = set()
+    for block in blocks:
+        if any(block is candidate for candidate, _side in stretched):
+            continue
+        text = clean_block_text(block)
+        if not STRETCHED_MARGIN_NUMBER_RE.fullmatch(text):
+            continue
+        side = None
+        if block["left"] + block["width"] <= page_width * 0.16:
+            side = "left"
+        elif block["left"] >= page_width * 0.84:
+            side = "right"
+        if side and block["height"] <= page_height * 0.05:
+            ordinary_numbers.add((side, int(text)))
+
+    source_words = []
+    if source_page is not None:
+        for word in source_page.get_text("words"):
+            token = str(word[4]).strip()
+            if not STRETCHED_MARGIN_NUMBER_RE.fullmatch(token):
+                continue
+            left, top, right, bottom = map(float, word[:4])
+            side = None
+            if right <= page_width * 0.18:
+                side = "left"
+            elif left >= page_width * 0.82:
+                side = "right"
+            if side:
+                source_words.append((side, int(token), left, top, right, bottom))
+
+    retained = [
+        block
+        for block in blocks
+        if not any(block is candidate for candidate, _side in stretched)
+    ]
+    for candidate, side in stretched:
+        intended = intended_stretched_margin_numbers(candidate.get("text", ""))
+        restored = []
+        candidate_top = float(candidate["top"])
+        candidate_bottom = block_bottom(candidate)
+        for word_side, value, left, top, right, bottom in source_words:
+            if word_side != side or value not in intended:
+                continue
+            if (side, value) in ordinary_numbers:
+                continue
+            center = (top + bottom) / 2.0
+            if not (candidate_top - 12.0 <= center <= candidate_bottom + 12.0):
+                continue
+            restored.append((value, left, top, right, bottom))
+            ordinary_numbers.add((side, value))
+        for restored_index, (value, left, top, right, bottom) in enumerate(
+            sorted(restored, key=lambda item: item[2])
+        ):
+            text = str(value)
+            retained.append(
+                {
+                    "order": float(candidate.get("order", 0)) + (restored_index + 1) / 1000,
+                    "category": candidate.get("category", "Text"),
+                    "text": text,
+                    "source_text": text,
+                    "line_info": [],
+                    "left": left,
+                    "top": top,
+                    "width": max(1.0, right - left),
+                    "height": max(1.0, bottom - top),
+                    "stretched_margin_numeric_block_repaired": True,
+                }
+            )
+    return retained
+
+
+def transformed_source_word_bbox(word, page_width, page_height, rotation_degrees=0):
+    left, top, right, bottom = map(float, word[:4])
+    if int(rotation_degrees or 0) % 360 == 180:
+        return (
+            page_width - right,
+            page_height - bottom,
+            page_width - left,
+            page_height - top,
+        )
+    return left, top, right, bottom
+
+
+def source_margin_number_sequences(
+    source_page,
+    page_width,
+    page_height,
+    rotation_degrees=0,
+):
+    """Find high-confidence five-line number sequences in the source text layer."""
+
+    candidates_by_side = {"left": [], "right": []}
+    if source_page is None:
+        return candidates_by_side
+    for word in source_page.get_text("words"):
+        token = str(word[4]).strip()
+        if not STRETCHED_MARGIN_NUMBER_RE.fullmatch(token):
+            continue
+        value = int(token)
+        if value <= 0 or value > 100 or value % 5:
+            continue
+        left, top, right, bottom = transformed_source_word_bbox(
+            word, page_width, page_height, rotation_degrees
+        )
+        if not (page_height * 0.08 <= top <= page_height * 0.90):
+            continue
+        side = None
+        if right <= page_width * 0.16:
+            side = "left"
+        elif left >= page_width * 0.84:
+            side = "right"
+        if side:
+            candidates_by_side[side].append(
+                (value, left, top, right, bottom)
+            )
+
+    sequences = {"left": [], "right": []}
+    for side, candidates in candidates_by_side.items():
+        candidates.sort(key=lambda item: (item[2], item[1]))
+        paths = [[index] for index in range(len(candidates))]
+        for index, candidate in enumerate(candidates):
+            value, left, top, right, _bottom = candidate
+            center_x = (left + right) / 2.0
+            for previous_index in range(index):
+                previous = candidates[previous_index]
+                previous_value, previous_left, previous_top, previous_right, _ = previous
+                previous_center_x = (previous_left + previous_right) / 2.0
+                if (
+                    value == previous_value + 5
+                    and top > previous_top + page_height * 0.015
+                    and abs(center_x - previous_center_x) <= page_width * 0.045
+                    and len(paths[previous_index]) + 1 > len(paths[index])
+                ):
+                    paths[index] = paths[previous_index] + [index]
+        if paths:
+            best = max(
+                paths,
+                key=lambda path: (
+                    len(path),
+                    -candidates[path[0]][0],
+                    candidates[path[-1]][2] - candidates[path[0]][2],
+                ),
+            )
+            if len(best) >= 5:
+                sequences[side] = [candidates[index] for index in best]
+    return sequences
+
+
+def margin_sequence_block_side(block, page_width, page_height):
+    text = clean_block_text(block)
+    if (
+        block.get("category") not in TEXT_MERGE_CATEGORIES
+        or not STRETCHED_MARGIN_NUMBER_RE.fullmatch(text)
+        or block["height"] > page_height * 0.035
+        or not (page_height * 0.08 <= block["top"] <= page_height * 0.90)
+    ):
+        return None
+    if block["left"] + block["width"] <= page_width * 0.16:
+        return "left"
+    if block["left"] >= page_width * 0.84:
+        return "right"
+    return None
+
+
+def synchronize_margin_number_sequence_from_source(
+    blocks,
+    page_width,
+    page_height,
+    source_page,
+    source_rotation_degrees=0,
+):
+    """Restore complete line-number runs from a validated source sequence."""
+
+    sequences = source_margin_number_sequences(
+        source_page,
+        page_width,
+        page_height,
+        source_rotation_degrees,
+    )
+    if not any(sequences.values()):
+        return blocks, False
+
+    retained = list(blocks)
+    changed = False
+    for side, source_sequence in sequences.items():
+        if not source_sequence:
+            continue
+        source_center_x = median(
+            [(item[1] + item[3]) / 2.0 for item in source_sequence]
+        )
+        source_top = source_sequence[0][2]
+        source_bottom = source_sequence[-1][4]
+        ordinary = []
+        stretched = []
+        for block in retained:
+            block_side = margin_sequence_block_side(
+                block, page_width, page_height
+            )
+            if block_side == side:
+                center_x = block["left"] + block["width"] / 2.0
+                if (
+                    abs(center_x - source_center_x) <= page_width * 0.055
+                    and source_top - page_height * 0.035
+                    <= block["top"]
+                    <= source_bottom + page_height * 0.035
+                ):
+                    ordinary.append(block)
+                continue
+            if (
+                stretched_margin_numeric_block_side(
+                    block, page_width, page_height
+                )
+                == side
+                and block_bottom(block) >= source_top
+                and block["top"] <= source_bottom
+            ):
+                stretched.append(block)
+
+        unmatched = list(ordinary)
+        replacements = []
+        for target_index, (value, left, top, right, bottom) in enumerate(
+            source_sequence
+        ):
+            target_center_y = (top + bottom) / 2.0
+            nearby = [
+                block
+                for block in unmatched
+                if abs(
+                    block["top"] + block["height"] / 2.0 - target_center_y
+                )
+                <= max(12.0, page_height * 0.035)
+            ]
+            if nearby:
+                block = min(
+                    nearby,
+                    key=lambda item: abs(
+                        item["top"] + item["height"] / 2.0 - target_center_y
+                    ),
+                )
+                unmatched.remove(block)
+                if clean_block_text(block) != str(value):
+                    block["text"] = str(value)
+                    block["source_text"] = str(value)
+                    block["line_info"] = []
+                    block["margin_number_sequence_value_repaired"] = True
+                    changed = True
+                continue
+            replacements.append(
+                {
+                    "order": float(target_index) / 1000.0,
+                    "category": "Text",
+                    "text": str(value),
+                    "source_text": str(value),
+                    "line_info": [],
+                    "left": left,
+                    "top": top,
+                    "width": max(1.0, right - left),
+                    "height": max(1.0, bottom - top),
+                    "margin_number_sequence_value_repaired": True,
+                    "margin_number_sequence_missing_value_restored": True,
+                }
+            )
+            changed = True
+
+        extras = unmatched + stretched
+        if extras:
+            retained = [
+                block
+                for block in retained
+                if not any(block is extra for extra in extras)
+            ]
+            changed = True
+        retained.extend(replacements)
+    return retained, changed
+
+
+def repair_margin_number_sequence_values(
+    blocks,
+    page_width,
+    page_height,
+    source_page=None,
+    source_rotation_degrees=0,
+):
+    """Repair isolated OCR digit errors without shifting over missing markers."""
+
+    blocks, source_synchronized = synchronize_margin_number_sequence_from_source(
+        blocks,
+        page_width,
+        page_height,
+        source_page,
+        source_rotation_degrees,
+    )
+    if source_synchronized:
+        return blocks
+
+    candidates_by_side = {"left": [], "right": []}
+    for block in blocks:
+        side = margin_sequence_block_side(block, page_width, page_height)
+        if not side:
+            continue
+        candidates_by_side[side].append((block, int(clean_block_text(block))))
+
+    for candidates in candidates_by_side.values():
+        candidates.sort(key=lambda item: item[0]["top"])
+        if len(candidates) < 5:
+            continue
+        observed = [value for _block, value in candidates]
+        stable_steps = sum(
+            following - previous == 5
+            for previous, following in zip(observed, observed[1:])
+        )
+        if stable_steps < 3:
+            continue
+
+        expected_by_index = {}
+        for index in range(1, len(candidates) - 1):
+            previous = observed[index - 1]
+            following = observed[index + 1]
+            if following - previous == 10:
+                expected_by_index[index] = previous + 5
+        if observed[2] - observed[1] == 5:
+            expected_by_index[0] = observed[1] - 5
+        if observed[-2] - observed[-3] == 5:
+            expected_by_index[len(candidates) - 1] = observed[-2] + 5
+
+        for index, target in expected_by_index.items():
+            block, actual = candidates[index]
+            if actual == target or target <= 0 or target > 100 or target % 5:
+                continue
+            block["text"] = str(target)
+            block["source_text"] = str(target)
+            block["line_info"] = []
+            block["margin_number_sequence_value_repaired"] = True
+    return blocks
+
+
+def strip_captured_margin_number_prefix(text, margin_number):
+    match = re.match(r"^\s*(\d{1,3})(?=\s|[A-ZÀ-ÖØ-Þ])\s*", str(text or ""))
+    if not match:
+        return str(text or "")
+    captured = match.group(1)
+    if not str(margin_number).endswith(captured):
+        return str(text or "")
+    return str(text or "")[match.end() :].lstrip()
+
+
+def strip_captured_margin_number_suffix(text, margin_number):
+    raw = str(text or "")
+    match = re.search(r"\s+(\d{1,3})\s*$", raw)
+    if not match:
+        return raw
+    captured = match.group(1)
+    if not str(margin_number).endswith(captured):
+        return raw
+    return raw[: match.start()].rstrip()
+
+
+def repair_overlapping_margin_line_number_blocks(blocks, page_width, page_height):
+    """Reserve a narrow column for detached five-line verse/prose markers."""
+
+    line_numbers = []
+    for block in blocks:
+        text = clean_block_text(block)
+        if not STRETCHED_MARGIN_NUMBER_RE.fullmatch(text):
+            continue
+        if block.get("category") not in TEXT_MERGE_CATEGORIES:
+            continue
+        if block["height"] > page_height * 0.035:
+            continue
+        if not (page_height * 0.08 <= block["top"] <= page_height * 0.90):
+            continue
+        side = None
+        if block["left"] + block["width"] <= page_width * 0.16:
+            side = "left"
+        elif block["left"] >= page_width * 0.84:
+            side = "right"
+        if side:
+            line_numbers.append((block, text, side))
+
+    for marker, marker_text, side in line_numbers:
+        marker_right = marker["left"] + marker["width"]
+        marker_bottom = block_bottom(marker)
+        for body in blocks:
+            if body is marker or body.get("category") not in (
+                TEXT_MERGE_CATEGORIES | {"Footnote"}
+            ):
+                continue
+            vertical_overlap = min(marker_bottom, block_bottom(body)) - max(
+                marker["top"], body["top"]
+            )
+            if vertical_overlap <= 0.0:
+                continue
+            if vertical_overlap / max(1.0, min(marker["height"], body["height"])) < 0.20:
+                continue
+            if horizontal_overlap_ratio(marker, body) < 0.15:
+                continue
+
+            gap = page_width * 0.012
+            body_left = float(body["left"])
+            body_right = body_left + float(body["width"])
+            original_body_text = str(body.get("text", ""))
+            if side == "left":
+                body_text = strip_captured_margin_number_prefix(
+                    original_body_text, marker_text
+                )
+            else:
+                body_text = strip_captured_margin_number_suffix(
+                    original_body_text, marker_text
+                )
+            captured_marker_removed = body_text != original_body_text
+            # Wide body blocks are separated geometrically as before. A short
+            # caption/signature is touched only when it contains the same
+            # marker token at the intersecting margin edge, which is strong
+            # evidence that Paddle captured the detached line number twice.
+            if body["width"] < page_width * 0.20 and not captured_marker_removed:
+                continue
+            if side == "left":
+                target_left = max(body_left, marker_right + gap)
+                if target_left >= body_right - 20.0:
+                    continue
+                body["left"] = target_left
+                body["width"] = body_right - target_left
+            else:
+                target_right = min(body_right, marker["left"] - gap)
+                if target_right <= body_left + 20.0:
+                    continue
+                body["width"] = target_right - body_left
+            if body_text:
+                body["text"] = body_text
+                body["source_text"] = body_text
+            body["line_info"] = []
+            body["margin_line_number_block_repaired"] = True
+    return blocks
+
+
+def separate_overlapping_consecutive_text_blocks(blocks, page_width, page_height):
+    """Separate distinct consecutive OCR blocks whose bboxes collide."""
+
+    candidates = sorted(
+        blocks,
+        key=lambda item: (item["top"], item["left"], item.get("order", 0)),
+    )
+    minimum_overlap = page_height * 0.0035
+    maximum_overlap = page_height * 0.016
+    for index, earlier in enumerate(candidates):
+        if earlier.get("category") not in TEXT_MERGE_CATEGORIES:
+            continue
+        if earlier["height"] > page_height * 0.04:
+            continue
+        earlier_key = fuzzy_dedupe_text_key(earlier.get("text", ""))
+        if len(earlier_key) < 8:
+            continue
+        for later in candidates[index + 1 :]:
+            if later["top"] <= earlier["top"]:
+                continue
+            if later.get("category") not in TEXT_MERGE_CATEGORIES:
+                continue
+            if later["height"] < page_height * 0.035:
+                continue
+            later_key = fuzzy_dedupe_text_key(later.get("text", ""))
+            if len(later_key) < 30 or earlier_key in later_key or later_key in earlier_key:
+                continue
+            overlap = block_bottom(earlier) - later["top"]
+            if overlap < minimum_overlap or overlap > maximum_overlap:
+                continue
+            if horizontal_overlap_ratio(earlier, later) < 0.50:
+                continue
+            maximum_width = max(earlier["width"], later["width"])
+            left_tolerance = 0.22 if earlier["width"] <= later["width"] * 0.85 else 0.12
+            if abs(later["left"] - earlier["left"]) > maximum_width * left_tolerance:
+                continue
+            old_bottom = block_bottom(later)
+            target_top = block_bottom(earlier) + max(0.5, page_height * 0.0007)
+            if old_bottom - target_top < page_height * 0.02:
+                continue
+            later["top"] = target_top
+            later["height"] = old_bottom - target_top
+            later["consecutive_text_overlap_separated"] = True
+            break
+    return blocks
+
+
+REFERENCE_TOKEN_PATTERN = r"\d{1,4}(?:\.\d+)(?:[-–—]\d+)?"
+REFERENCE_MARGIN_LINE_RE = re.compile(
+    rf"^\s*\(?{REFERENCE_TOKEN_PATTERN}\)?"
+    rf"(?:\s+\(?{REFERENCE_TOKEN_PATTERN}\)?)?\s*$"
+)
+REFERENCE_PREFIX_RE = re.compile(rf"^\s*({REFERENCE_TOKEN_PATTERN})\s*")
+BODY_REFERENCE_PREFIX_RE = re.compile(
+    r"^\s*((?:\d{1,4})?\.\d+(?:[-–—]\d+)?)\s*"
+)
+
+
+def normalized_reference_token(text):
+    return re.sub(r"[–—]", "-", str(text or "").strip("() "))
+
+
+def strip_captured_reference_prefix(text, reference_tokens):
+    prefix = BODY_REFERENCE_PREFIX_RE.match(str(text or ""))
+    if not prefix:
+        return str(text or "")
+    token = normalized_reference_token(prefix.group(1))
+    if not any(
+        token == reference or (len(token) >= 3 and reference.endswith(token))
+        for reference in reference_tokens
+    ):
+        return str(text or "")
+    return str(text or "")[prefix.end() :].lstrip()
+
+
+def repair_overlapping_margin_reference_blocks(blocks, page_width):
+    """Restore a narrow reference column that Paddle placed over body text."""
+
+    reference_blocks = []
+    for block in blocks:
+        if block.get("category") not in TEXT_MERGE_CATEGORIES:
+            continue
+        lines = [value for _start, _end, value in nonempty_line_spans(block.get("text", ""))]
+        if not (1 <= len(lines) <= 4):
+            continue
+        if not all(REFERENCE_MARGIN_LINE_RE.fullmatch(value) for value in lines):
+            continue
+        if block["width"] > page_width * 0.28:
+            continue
+        reference_blocks.append((block, lines))
+
+    for reference, reference_lines in reference_blocks:
+        reference_right = reference["left"] + reference["width"]
+        reference_bottom = block_bottom(reference)
+        reference_tokens = {
+            normalized_reference_token(match.group(1))
+            for line in reference_lines
+            for match in [REFERENCE_PREFIX_RE.match(line.strip("() "))]
+            if match
+        }
+        for body in blocks:
+            if body is reference or body.get("category") not in TEXT_MERGE_CATEGORIES:
+                continue
+            if body["width"] < page_width * 0.25:
+                continue
+            if abs(body["left"] - reference["left"]) > page_width * 0.04:
+                continue
+            if horizontal_overlap_ratio(reference, body) < 0.75:
+                continue
+            vertical_overlap = min(reference_bottom, block_bottom(body)) - max(
+                reference["top"], body["top"]
+            )
+            if vertical_overlap <= 0.0:
+                continue
+            if vertical_overlap / max(1.0, min(reference["height"], body["height"])) < 0.20:
+                continue
+
+            body_text = strip_captured_reference_prefix(
+                body.get("text", ""), reference_tokens
+            )
+            target_left = max(
+                float(body["left"]),
+                reference_right + page_width * 0.035,
+            )
+            body_right = body["left"] + body["width"]
+            if target_left >= body_right - 20.0 or not body_text:
+                continue
+            body["left"] = target_left
+            body["width"] = body_right - target_left
+            body["text"] = body_text
+            body["source_text"] = body_text
+            body["line_info"] = []
+            body["margin_reference_block_repaired"] = True
+
+    for index, block in enumerate(
+        sorted(
+            blocks,
+            key=lambda item: (
+                is_header_footer(item),
+                item["top"],
+                item["left"],
+                item.get("order", 0),
+            ),
+        )
+    ):
+        block["order"] = index
+    return blocks
 
 
 MARGIN_CLAMP_BLOCK_CATEGORIES = {
@@ -1165,6 +2248,8 @@ _COMPONENT_EXPORTS = (
     "fallback_text_block",
     "image_fallback_block",
     "blocks_from_page_result",
+    "source_page_text_rotation_degrees",
+    "rotate_blocks_for_source_orientation",
     "has_cjk",
     "inline_markdown_segments",
     "markdown_line_to_segments",
@@ -1201,11 +2286,28 @@ _COMPONENT_EXPORTS = (
     "horizontal_overlap_ratio",
     "block_bottom",
     "dedupe_text_key",
+    "join_deduplicated_text",
     "append_text_with_overlap",
     "text_overlap_like",
     "retry_blocks_should_merge",
     "merge_retry_block_pair",
     "merge_overlapping_retry_blocks",
+    "duplicate_ocr_blocks_should_merge",
+    "merge_overlapping_duplicate_ocr_blocks",
+    "fuzzy_dedupe_text_key",
+    "leading_ocr_reference",
+    "anchored_duplicate_short_block",
+    "repair_overlapping_fuzzy_duplicate_ocr_lines",
+    "stretched_margin_numeric_block_side",
+    "intended_stretched_margin_numbers",
+    "repair_stretched_margin_numeric_ocr_blocks",
+    "repair_margin_number_sequence_values",
+    "strip_captured_margin_number_prefix",
+    "repair_overlapping_margin_line_number_blocks",
+    "separate_overlapping_consecutive_text_blocks",
+    "strip_captured_reference_prefix",
+    "repair_overlapping_margin_reference_blocks",
+    "trim_small_adjacent_text_block_overlaps",
     "clamp_split_retry_block_to_page_margins",
     "clamp_split_retry_blocks_to_page_margins",
     "min_line_height_for_block",

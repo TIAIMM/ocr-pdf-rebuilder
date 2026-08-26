@@ -52,6 +52,34 @@ def collect_qc_suspect_pages(pdf_path, page_results, page_specs, page_count):
                 issues.append("high_repeated_pseudotext")
             if result.get("image_fallback_page") or result.get("image_fallback_path"):
                 issues.append("image_fallback_page")
+            if result.get("source_facsimile_detected"):
+                issues.append("source_facsimile_image_fallback")
+            if result.get("source_auxiliary_color_raster_count"):
+                issues.append("source_auxiliary_color_image_fallback")
+            if result.get("complex_layout_detected"):
+                issues.append("complex_layout_image_fallback")
+            if result.get("duplicate_ocr_blocks_merged"):
+                issues.append("duplicate_ocr_blocks_merged")
+            if result.get("duplicate_ocr_lines_removed"):
+                issues.append("duplicate_ocr_lines_removed")
+            if result.get("source_orientation_correction_degrees"):
+                issues.append("source_orientation_corrected")
+            if result.get("source_orientation_quality_fallback"):
+                issues.append("source_orientation_quality_image_fallback")
+            if result.get("anchored_duplicate_ocr_blocks_removed"):
+                issues.append("anchored_duplicate_ocr_blocks_removed")
+            if result.get("margin_reference_blocks_repaired"):
+                issues.append("margin_reference_blocks_repaired")
+            if result.get("adjacent_text_overlaps_trimmed"):
+                issues.append("adjacent_text_overlaps_trimmed")
+            if result.get("stretched_margin_numeric_blocks_repaired"):
+                issues.append("stretched_margin_numeric_blocks_repaired")
+            if result.get("margin_line_number_blocks_repaired"):
+                issues.append("margin_line_number_blocks_repaired")
+            if result.get("margin_number_sequence_values_repaired"):
+                issues.append("margin_number_sequence_values_repaired")
+            if result.get("consecutive_text_overlaps_separated"):
+                issues.append("consecutive_text_overlaps_separated")
             if result.get("layout_fit_failures"):
                 issues.append("layout_block_could_not_fit_bbox")
             if result.get("paddle_bbox_content_repaired"):
@@ -192,6 +220,7 @@ def write_mineru_qc_report(
     page_specs,
     output_pdf,
     output_image_pdf=None,
+    output_searchable_pdf=None,
     image_fallback_pages=None,
     parser_runs=None,
     output_validation_scan=None,
@@ -241,6 +270,7 @@ def write_mineru_qc_report(
         "output_pdf": str(output_pdf),
         "output_text_pdf": str(output_pdf),
         "output_image_pdf": str(output_image_pdf) if output_image_pdf else None,
+        "output_searchable_pdf": str(output_searchable_pdf) if output_searchable_pdf else None,
         "image_fallback_pages": [int(page_index) + 1 for page_index in (image_fallback_pages or [])],
         "mineru_output_dir": str(mineru_dir),
         "mineru_sources": source_reports,

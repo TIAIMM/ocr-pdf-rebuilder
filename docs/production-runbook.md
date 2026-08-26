@@ -99,6 +99,9 @@ engine invocation, so that chunk starts again on the next run.
 - text-only PDFs contain no raster images;
 - every fallback page is blank in text-only output and imaged in the image
   variant;
+- the searchable variant renders pixel-identically to the source, extracts OCR
+  text on every page that produced overlay text, and carries no text for blank,
+  table, formula or picture content;
 - formula, table, footnote and reading-order suspect pages are reviewed from QC;
 - extracted output contains no control characters. Before ReportLab draws a
   run, its selected font must cover every character; known OCR symbol
@@ -129,3 +132,5 @@ Representative rendered-page inspection remains part of production acceptance.
 During step 4, the log and GUI must advance through `Render text PDF page`,
 `Validate text PDF page`, and, when a companion artifact exists, `Render image
 PDF page` plus `Validate image PDF page`, each with current/total page counts.
+The searchable variant then logs `Searchable PDF page` and `Validate searchable
+PDF page` with the same current/total convention.

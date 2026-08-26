@@ -32,7 +32,7 @@ GREEK_ITALIC_FONT = RUNTIME_ROOT / "fonts/DejaVuSerif-Italic.ttf"
 MONO_FONT = RUNTIME_ROOT / "fonts/NotoSansMono-Regular.ttf"
 
 DPI = 200
-OUTPUT_VERSION = "mineru-reportlab-cell-aware-render-v52-forward-page-leak-repair"
+OUTPUT_VERSION = "mineru-reportlab-cell-aware-render-v55-searchable-ocr-latex-hardening"
 
 # MinerU execution. Leave values as None to keep MinerU's own defaults.
 # When MINERU_API_URL is unset, each document owns one lazy local API process
@@ -78,6 +78,44 @@ UNFITTING_LAYOUT_IMAGE_FALLBACK_REASON = "OCR layout block could not fit inside 
 TABLE_TEXT_RETRY_REASON = "table block could not fit bbox; retried page with MinerU table recognition disabled"
 MISSING_OCR_IMAGE_FALLBACK_REASON = "nonblank source page has no MinerU page result; image variant required"
 UNUSABLE_OCR_IMAGE_FALLBACK_REASON = "OCR remained unusable after retry (handwriting or low-quality scan); image variant required"
+SOURCE_FACSIMILE_IMAGE_FALLBACK_REASON = (
+    "source page contains a separately embedded facsimile or chromatic artifact; "
+    "image variant required"
+)
+SOURCE_ORIENTATION_IMAGE_FALLBACK_REASON = (
+    "physically inverted source page produced overlapping alternate OCR readings; "
+    "rotated source-page image variant required"
+)
+SOURCE_FACSIMILE_MIN_SHORT_EDGE_PX = 500
+SOURCE_FACSIMILE_MIN_LONG_EDGE_PX = 800
+SOURCE_FACSIMILE_MIN_LARGE_RASTERS = 2
+SOURCE_AUXILIARY_COLOR_MIN_SHORT_EDGE_PX = 32
+SOURCE_AUXILIARY_COLOR_MAX_AREA_RATIO = 0.25
+COMPLEX_LAYOUT_IMAGE_FALLBACK_REASON = (
+    "OCR flattened or omitted source-page layout/content that cannot be represented "
+    "safely as positioned text; image variant required"
+)
+COMPLEX_LAYOUT_DENSE_MIN_LINES = 40
+COMPLEX_LAYOUT_DENSE_MAX_MEDIAN_KEY_CHARS = 12
+COMPLEX_LAYOUT_DENSE_MIN_HEIGHT_RATIO = 0.35
+COMPLEX_LAYOUT_REFERENCE_MIN_LINES = 20
+COMPLEX_LAYOUT_REFERENCE_MIN_NUMERIC_LINE_RATIO = 0.40
+COMPLEX_LAYOUT_REFERENCE_MIN_WIDTH_RATIO = 0.45
+COMPLEX_LAYOUT_REFERENCE_MIN_HEIGHT_RATIO = 0.20
+COMPLEX_LAYOUT_REPEATED_MIN_KEY_CHARS = 15
+COMPLEX_LAYOUT_REPEATED_MIN_WIDTH_RATIO = 0.48
+COMPLEX_LAYOUT_SHORT_REPEATED_MAX_WIDTH_RATIO = 0.45
+COMPLEX_LAYOUT_SHORT_REPEATED_MAX_HEIGHT_RATIO = 0.06
+COMPLEX_LAYOUT_MONOTONIC_MIN_RUN = 64
+COMPLEX_LAYOUT_CONTENTS_KEYS = {"inhalt", "xinhalt"}
+COMPLEX_LAYOUT_SOURCE_TEXT_MIN_CHARS = 150
+COMPLEX_LAYOUT_MAX_OUTPUT_SOURCE_TEXT_RATIO = 0.20
+COMPLEX_LAYOUT_GAP_MIN_HEIGHT_RATIO = 0.10
+COMPLEX_LAYOUT_GAP_MIN_BLOCK_WIDTH_RATIO = 0.08
+COMPLEX_LAYOUT_GAP_DARK_PIXEL_THRESHOLD = 180
+COMPLEX_LAYOUT_GAP_MIN_DARK_RATIO = 0.01
+COMPLEX_LAYOUT_GAP_MIN_ACTIVE_ROW_RATIO = 0.50
+COMPLEX_LAYOUT_GAP_MIN_ACTIVE_COLUMN_RATIO = 0.25
 FORWARD_PAGE_LEAK_RETRY_REASON = "forward page content leak detected; isolated MinerU retry needed"
 FORWARD_PAGE_LEAK_SOURCE_TEXT_FALLBACK_REASON = (
     "isolated MinerU retry did not pass page-local validation; used source PDF page text"
@@ -182,10 +220,13 @@ FONT_TEST_TEXT_RE = re.compile(
     re.IGNORECASE,
 )
 LATEX_RESIDUE_RE = re.compile(
-    r"\\(?:frac|dfrac|tfrac|sqrt|text|textregistered|mathrm|mathbf|mathit|mathsf|operatorname|"
-    r"times|cdot|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|sigma|omega|"
-    r"leq|geq|neq|left|right)\b"
+    r"\\(?:[A-Za-z]+\*?|[,;:!])"
     r"|[\^_]\s*\{"
+    r"|\{\{|\}\}"
+    r"|\${1,2}\s*(?:\\[A-Za-z]+|[\^_{}])"
+    r"|cdot(?=[A-ZΑ-ω])"
+    r"|operatorname(?=[A-Za-zΑ-ω])"
+    r"|⟨colon⟩"
 )
 
 

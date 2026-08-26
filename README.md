@@ -1,12 +1,15 @@
 # ocr-pdf-rebuilder
 
 Resumable, failure-isolated OCR and PDF reconstruction for long multilingual
-documents. The production path uses MinerU layout/OCR results and rebuilds two
-page-aligned PDFs when image fallback is required:
+documents. The production path uses MinerU layout/OCR results, rebuilds two
+page-aligned PDFs when image fallback is required, and always emits a
+searchable variant that keeps the original scans:
 
 - a text-only PDF in which handwriting, unusable scans and full-page-image
   fallback pages remain blank;
-- an image variant in which those pages contain their source-page images.
+- an image variant in which those pages contain their source-page images;
+- a searchable PDF that overlays an invisible OCR text layer (PDF render
+  mode 3) on the original scanned pages, leaving every pixel unchanged.
 
 Runtime directories now live directly under this repository. Books, generated
 PDFs, fonts, logs, checkpoints and QC renders are excluded by `.gitignore`; they
@@ -57,6 +60,9 @@ components have no dependency back to either CLI entry point:
 - `reportlab_renderer.py`: font selection, measurement, exact fitting-boundary
   searches, source-positioned numbered-text rendering, registered-glyph
   coverage checks, visible missing-glyph fallback and PDF drawing;
+- `searchable_pdf.py`: invisible OCR text layer (render mode 3) over the
+  original scans, span/line/block placement cascade, and text-presence plus
+  pixel-identity validation of the searchable variant;
 - `qc_reporting.py`: suspect-page analysis, debug artifacts and QC reports;
 - `pipeline_orchestrator.py`: one-document production flow and workspace
   lifecycle;

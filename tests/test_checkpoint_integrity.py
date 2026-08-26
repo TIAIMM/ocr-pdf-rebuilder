@@ -7,6 +7,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import fitz
+
 from support import load_pipeline
 from ocr_pdf_rebuilder.code_identity import package_source_identity
 
@@ -103,6 +105,7 @@ class CheckpointIntegrityTests(unittest.TestCase):
                     self.root / "output.pdf",
                     self.root / "output.md",
                     self.root / "output-images.pdf",
+                    self.root / "output-searchable.pdf",
                 )
             )
 
@@ -151,6 +154,108 @@ class CheckpointIntegrityTests(unittest.TestCase):
             self.pipeline, "mineru_runtime_identity_hash", return_value=expected
         ):
             self.assertFalse(self.pipeline.completed_runtime_identity_matches(state))
+
+    def test_completion_state_round_trip_includes_searchable_pdf(self):
+        source = self.root / "source.pdf"
+        text_pdf = self.root / "output.pdf"
+        searchable_pdf = self.root / "output-searchable.pdf"
+        markdown = self.root / "output.md"
+        image_pdf = self.root / "output-images.pdf"
+        state_path = self.root / "output.version"
+        for pdf_path, page_text in (
+            (source, "source page"),
+            (text_pdf, "rebuilt page"),
+            (searchable_pdf, "searchable page"),
+        ):
+            with fitz.open() as document:
+                document.new_page().insert_text((36, 36), page_text)
+                document.save(pdf_path)
+        markdown.write_text("# output\n", encoding="utf-8")
+
+        raw_identity = {
+            "identity_schema": 2,
+            "mineru_command": "mineru",
+            "mineru_version_output": "3.3.1",
+            "mineru_command_error": None,
+            "mineru_executable": {
+                "path": "/bin/mineru",
+                "size": 10,
+                "sha256": "a" * 64,
+            },
+            "python": {
+                "executable": "/bin/python",
+                "version": "3.12.13",
+                "platform": "linux",
+            },
+            "packages": {"mineru": "3.3.1"},
+            "models": [
+                {
+                    "path": "/models/current",
+                    "files": [
+                        {"path": "model.safetensors", "size": 20, "sha256": "b" * 64}
+                    ],
+                }
+            ],
+        }
+        identity = self.pipeline.normalize_runtime_identity(raw_identity)
+        identity_hash = self.pipeline.stable_json_hash(identity)
+        source_signature = {"path": "source.pdf", "size": 1, "sha256": "e" * 64}
+
+        with (
+            mock.patch.object(
+                self.pipeline, "source_file_signature", return_value=source_signature
+            ),
+            mock.patch.object(
+                self.pipeline, "current_package_source_identity_hash", return_value="c" * 64
+            ),
+            mock.patch.object(
+                self.pipeline,
+                "current_package_source_identity",
+                return_value={"files_sha256": "c" * 64},
+            ),
+            mock.patch.object(
+                self.pipeline, "mineru_runtime_identity", return_value=identity
+            ),
+            mock.patch.object(
+                self.pipeline, "mineru_runtime_identity_hash", return_value=identity_hash
+            ),
+        ):
+            self.pipeline.write_completed_output_state(
+                state_path,
+                source,
+                text_pdf,
+                markdown,
+                image_pdf,
+                searchable_pdf,
+                [],
+            )
+            state = self.pipeline.read_checkpoint(state_path)
+            self.assertIn("searchable_pdf", state)
+            self.assertEqual(state["searchable_pdf"]["page_count"], 1)
+            self.assertTrue(
+                self.pipeline.completed_output_state_matches(
+                    state_path, source, text_pdf, markdown, image_pdf, searchable_pdf
+                )
+            )
+
+            searchable_pdf.unlink()
+            self.assertFalse(
+                self.pipeline.completed_output_state_matches(
+                    state_path, source, text_pdf, markdown, image_pdf, searchable_pdf
+                )
+            )
+
+        with fitz.open() as document:
+            document.new_page().insert_text((36, 36), "searchable page")
+            document.save(searchable_pdf)
+        dropped = dict(state)
+        dropped.pop("searchable_pdf")
+        self.pipeline.write_checkpoint(state_path, dropped)
+        self.assertFalse(
+            self.pipeline.completed_output_state_matches(
+                state_path, source, text_pdf, markdown, image_pdf, searchable_pdf
+            )
+        )
 
 
 if __name__ == "__main__":

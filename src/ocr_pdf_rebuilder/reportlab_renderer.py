@@ -660,6 +660,31 @@ def line_info_rect(block, line):
     return rect
 
 
+def structured_line_info_has_latex_residue(block):
+    """Detect raw TeX retained in structured line/span drawing caches."""
+
+    def value_has_residue(value):
+        return isinstance(value, str) and bool(LATEX_RESIDUE_RE.search(value))
+
+    for line in block.get("line_info") or []:
+        if not isinstance(line, dict):
+            continue
+        if any(
+            value_has_residue(line.get(key))
+            for key in ("text", "content", "source_text", "latex", "html")
+        ):
+            return True
+        for span in line.get("spans") or []:
+            if not isinstance(span, dict):
+                continue
+            if any(
+                value_has_residue(span.get(key))
+                for key in ("text", "content", "source_text", "latex", "html")
+            ):
+                return True
+    return False
+
+
 def usable_line_info(block):
     if not USE_LINE_INFO_RENDERING:
         return []
@@ -1425,12 +1450,21 @@ def render_blocks_to_pdf_reportlab(
                 ):
                     continue
 
-            text = normalize_markdown_text(block.get("text", ""))
+            raw_text = str(block.get("text", "") or "")
+            raw_source_text = str(block.get("source_text", "") or "")
+            cached_line_residue = structured_line_info_has_latex_residue(block)
+            raw_block_residue = bool(
+                LATEX_RESIDUE_RE.search(raw_text)
+                or LATEX_RESIDUE_RE.search(raw_source_text)
+            )
+            text = normalize_markdown_text(raw_text)
             if LATEX_RESIDUE_RE.search(text) or (not text and is_formula_render_block(block)):
                 text = normalize_markdown_text(linearize_latex_formula(text or formula_source_text(block)))
+            if raw_block_residue or cached_line_residue:
                 block["text"] = text
-                # Structured line fragments still contain the pre-normalized
-                # OCR payload and would bypass the safe textbox text below.
+                # Structured line fragments can retain the pre-normalized OCR
+                # payload even when the main block is already clean. Drawing
+                # those fragments would bypass contextual normalization.
                 block["line_info"] = []
             if LATEX_RESIDUE_RE.search(text):
                 raise RuntimeError(

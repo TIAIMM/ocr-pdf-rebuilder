@@ -381,6 +381,7 @@ def completed_output_state_matches(
     text_pdf_path,
     markdown_path,
     image_pdf_path,
+    searchable_pdf_path,
 ):
     state = read_checkpoint(state_path)
     if (
@@ -399,13 +400,18 @@ def completed_output_state_matches(
             expected_page_count = int(source.page_count)
         text_signature = pdf_artifact_signature(text_pdf_path)
         markdown_signature = file_integrity_signature(markdown_path)
+        searchable_signature = pdf_artifact_signature(searchable_pdf_path)
     except (OSError, RuntimeError, ValueError, fitz.FileDataError):
         return False
     if text_signature != state.get("text_pdf"):
         return False
     if markdown_signature != state.get("markdown"):
         return False
+    if searchable_signature != state.get("searchable_pdf"):
+        return False
     if text_signature.get("page_count") != expected_page_count:
+        return False
+    if searchable_signature.get("page_count") != expected_page_count:
         return False
     has_image_variant = bool(state.get("has_image_variant"))
     if has_image_variant != image_pdf_path.exists():
@@ -442,6 +448,7 @@ def write_completed_output_state(
     text_pdf_path,
     markdown_path,
     image_pdf_path,
+    searchable_pdf_path,
     image_fallback_pages,
 ):
     text_signature = pdf_artifact_signature(text_pdf_path)
@@ -449,6 +456,7 @@ def write_completed_output_state(
     image_signature = (
         pdf_artifact_signature(image_pdf_path) if image_fallback_pages else None
     )
+    searchable_signature = pdf_artifact_signature(searchable_pdf_path)
     write_checkpoint(
         state_path,
         {
@@ -462,6 +470,7 @@ def write_completed_output_state(
             "text_pdf": text_signature,
             "markdown": markdown_signature,
             "image_pdf": image_signature,
+            "searchable_pdf": searchable_signature,
             "has_image_variant": bool(image_fallback_pages),
             "image_fallback_pages": [int(page_index) + 1 for page_index in image_fallback_pages],
             "updated_at": time.time(),

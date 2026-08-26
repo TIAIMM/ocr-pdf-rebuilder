@@ -36,6 +36,8 @@ PADDLE_PYTHON = Path(
     )
 ).expanduser()
 PADDLE_DEVICE = os.environ.get("PADDLEOCR_DEVICE", "gpu:0")
+# This value is PaddleOCR's model protocol selector, not this repository's
+# release number. PaddleOCR-VL 1.6 accepts only v1/v1.5/v1.6.
 PADDLE_PIPELINE_VERSION = "v1.6"
 PADDLE_LAYOUT_MODEL = "PP-DocLayoutV3"
 PADDLE_RECOGNITION_MODEL = "PaddleOCR-VL-1.6-0.9B"
@@ -68,7 +70,7 @@ PADDLE_DPI = shared.DPI
 PADDLE_PROCESS_TIMEOUT_SECONDS = 24 * 60 * 60
 PADDLE_PROCESS_IDLE_TIMEOUT_SECONDS = 30 * 60
 PADDLE_PROCESS_TERMINATE_GRACE_SECONDS = 20
-OUTPUT_VERSION = "paddleocr-vl-1.6-reportlab-shared-render-v1"
+OUTPUT_VERSION = "paddleocr-vl-1.6-reportlab-latex-layout-hardening-v10"
 CHECKPOINT_SCHEMA = 1
 SKIP_EXISTING = True
 
@@ -691,6 +693,49 @@ def write_paddle_qc_report(
                 "json_path": result.get("json_path"),
                 "retry_reason": result.get("retry_reason"),
                 "cell_count": len(result.get("cells") or []),
+                "image_fallback_kind": result.get("image_fallback_kind"),
+                "source_facsimile_large_raster_count": result.get(
+                    "source_facsimile_large_raster_count"
+                ),
+                "source_auxiliary_color_raster_count": result.get(
+                    "source_auxiliary_color_raster_count"
+                ) or 0,
+                "complex_layout_fallback_reasons": result.get(
+                    "complex_layout_fallback_reasons"
+                ) or [],
+                "duplicate_ocr_lines_removed": result.get(
+                    "duplicate_ocr_lines_removed"
+                ) or 0,
+                "margin_reference_blocks_repaired": result.get(
+                    "margin_reference_blocks_repaired"
+                ) or 0,
+                "adjacent_text_overlaps_trimmed": result.get(
+                    "adjacent_text_overlaps_trimmed"
+                ) or 0,
+                "stretched_margin_numeric_blocks_repaired": result.get(
+                    "stretched_margin_numeric_blocks_repaired"
+                ) or 0,
+                "margin_line_number_blocks_repaired": result.get(
+                    "margin_line_number_blocks_repaired"
+                ) or 0,
+                "margin_number_sequence_values_repaired": result.get(
+                    "margin_number_sequence_values_repaired"
+                ) or 0,
+                "consecutive_text_overlaps_separated": result.get(
+                    "consecutive_text_overlaps_separated"
+                ) or 0,
+                "source_orientation_correction_degrees": result.get(
+                    "source_orientation_correction_degrees"
+                ) or 0,
+                "source_orientation_quality_fallback": bool(
+                    result.get("source_orientation_quality_fallback")
+                ),
+                "source_orientation_duplicate_count": result.get(
+                    "source_orientation_duplicate_count"
+                ) or 0,
+                "anchored_duplicate_ocr_blocks_removed": result.get(
+                    "anchored_duplicate_ocr_blocks_removed"
+                ) or 0,
                 "bbox_content_repairs": result.get("paddle_bbox_content_repairs") or [],
             }
             for page, result in sorted(page_results.items())
@@ -739,6 +784,136 @@ def build_outputs(
                 log(f"        Page {page_index + 1}: used source page image fallback")
             else:
                 blocks = shared.blocks_from_page_result(result, page_width, page_height)
+                source_rotation = shared.source_page_text_rotation_degrees(page)
+                if source_rotation:
+                    blocks = shared.rotate_blocks_for_source_orientation(
+                        blocks,
+                        page_width,
+                        page_height,
+                        source_rotation,
+                    )
+                    result["source_orientation_correction_degrees"] = source_rotation
+                    # Paddle's flattened Markdown follows the inverted raster
+                    # order.  Regenerate it from the corrected block geometry.
+                    result["md_nohf_text"] = ""
+                    log(
+                        f"        Page {page_index + 1}: corrected "
+                        f"{source_rotation}-degree source-page orientation"
+                    )
+                before_merge_count = len(blocks)
+                blocks = shared.merge_overlapping_duplicate_ocr_blocks(blocks)
+                merged_count = before_merge_count - len(blocks)
+                if merged_count:
+                    result["duplicate_ocr_blocks_merged"] = merged_count
+                    log(
+                        f"        Page {page_index + 1}: merged {merged_count} "
+                        "overlapping duplicate OCR block(s)"
+                    )
+                blocks = shared.repair_overlapping_fuzzy_duplicate_ocr_lines(blocks)
+                fuzzy_removed_count = sum(
+                    int(block.get("fuzzy_duplicate_ocr_lines_removed", 0))
+                    + int(block.get("anchored_duplicate_ocr_blocks_removed", 0))
+                    for block in blocks
+                )
+                if fuzzy_removed_count:
+                    result["duplicate_ocr_lines_removed"] = fuzzy_removed_count
+                    result["anchored_duplicate_ocr_blocks_removed"] = sum(
+                        int(block.get("anchored_duplicate_ocr_blocks_removed", 0))
+                        for block in blocks
+                    )
+                    log(
+                        f"        Page {page_index + 1}: removed {fuzzy_removed_count} "
+                        "fuzzy duplicate OCR edge line(s)"
+                    )
+                blocks = shared.repair_stretched_margin_numeric_ocr_blocks(
+                    blocks, page_width, page_height, source_page=page
+                )
+                stretched_repair_count = sum(
+                    bool(block.get("stretched_margin_numeric_block_repaired"))
+                    for block in blocks
+                )
+                if stretched_repair_count:
+                    result["stretched_margin_numeric_blocks_repaired"] = (
+                        stretched_repair_count
+                    )
+                    log(
+                        f"        Page {page_index + 1}: restored "
+                        f"{stretched_repair_count} line number(s) from a stretched OCR block"
+                    )
+                blocks = shared.repair_margin_number_sequence_values(
+                    blocks,
+                    page_width,
+                    page_height,
+                    source_page=page,
+                    source_rotation_degrees=source_rotation,
+                )
+                sequence_value_repair_count = sum(
+                    bool(block.get("margin_number_sequence_value_repaired"))
+                    for block in blocks
+                )
+                if sequence_value_repair_count:
+                    result["margin_number_sequence_values_repaired"] = (
+                        sequence_value_repair_count
+                    )
+                    log(
+                        f"        Page {page_index + 1}: corrected "
+                        f"{sequence_value_repair_count} margin line-number value(s) "
+                        "from the five-line sequence"
+                    )
+                blocks = shared.repair_overlapping_margin_line_number_blocks(
+                    blocks, page_width, page_height
+                )
+                line_number_repair_count = sum(
+                    bool(block.get("margin_line_number_block_repaired"))
+                    for block in blocks
+                )
+                if line_number_repair_count:
+                    result["margin_line_number_blocks_repaired"] = (
+                        line_number_repair_count
+                    )
+                    log(
+                        f"        Page {page_index + 1}: repaired "
+                        f"{line_number_repair_count} overlapping margin line-number block(s)"
+                    )
+                blocks = shared.repair_overlapping_margin_reference_blocks(
+                    blocks, page_width
+                )
+                margin_repair_count = sum(
+                    bool(block.get("margin_reference_block_repaired"))
+                    for block in blocks
+                )
+                if margin_repair_count:
+                    result["margin_reference_blocks_repaired"] = margin_repair_count
+                    log(
+                        f"        Page {page_index + 1}: repaired {margin_repair_count} "
+                        "overlapping margin-reference body block(s)"
+                    )
+                blocks = shared.separate_overlapping_consecutive_text_blocks(
+                    blocks, page_width, page_height
+                )
+                consecutive_separation_count = sum(
+                    bool(block.get("consecutive_text_overlap_separated"))
+                    for block in blocks
+                )
+                if consecutive_separation_count:
+                    result["consecutive_text_overlaps_separated"] = (
+                        consecutive_separation_count
+                    )
+                    log(
+                        f"        Page {page_index + 1}: separated "
+                        f"{consecutive_separation_count} consecutive text bbox overlap(s)"
+                    )
+                blocks = shared.trim_small_adjacent_text_block_overlaps(blocks)
+                adjacent_trim_count = sum(
+                    bool(block.get("adjacent_text_overlap_trimmed"))
+                    for block in blocks
+                )
+                if adjacent_trim_count:
+                    result["adjacent_text_overlaps_trimmed"] = adjacent_trim_count
+                    log(
+                        f"        Page {page_index + 1}: trimmed {adjacent_trim_count} "
+                        "small adjacent text bbox overlap(s)"
+                    )
                 if not blocks and result.get("fallback_text"):
                     block = shared.fallback_text_block(
                         result["fallback_text"], 0, page_width, page_height
@@ -766,6 +941,24 @@ def build_outputs(
                     log(
                         f"        Page {page_index + 1}: {len(failures)} OCR block(s) "
                         "could not fit safely; used source page image fallback"
+                    )
+                blocks, orientation_fallback = (
+                    shared.fallback_damaged_source_orientation_page(
+                        pdf_path,
+                        page_index,
+                        result,
+                        blocks,
+                        page_width,
+                        page_height,
+                        work_dir,
+                        source_rotation,
+                    )
+                )
+                if orientation_fallback:
+                    log(
+                        f"        Page {page_index + 1}: inverted source produced "
+                        "overlapping alternate OCR readings; used a rotated source "
+                        "page image fallback"
                     )
             for block in blocks:
                 block["page_index"] = page_index
@@ -910,6 +1103,12 @@ def process_pdf(pdf_path: Path, index: int, total: int) -> dict[str, object]:
         pdf_path, page_results, work_dir
     )
     page_results = shared.degrade_unusable_nonblank_pages_to_images(
+        pdf_path, page_results, work_dir
+    )
+    page_results = shared.degrade_source_facsimile_pages_to_images(
+        pdf_path, page_results, work_dir
+    )
+    page_results = shared.degrade_complex_layout_pages_to_images(
         pdf_path, page_results, work_dir
     )
     image_fallback_pages = build_outputs(

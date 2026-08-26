@@ -544,6 +544,7 @@ LATEX_SYMBOL_MAP = {
     "simeq": "≃",
     "times": "×",
     "cdot": "·",
+    "colon": ":",
     "pm": "±",
     "mp": "∓",
     "infty": "∞",
@@ -569,6 +570,20 @@ LATEX_SYMBOL_MAP = {
     "neg": "¬",
     "land": "∧",
     "lor": "∨",
+    "parallel": "∥",
+    "triangle": "△",
+    "langle": "⟨",
+    "rangle": "⟩",
+    "cdots": "⋯",
+    "ldots": "…",
+    "dots": "…",
+    "div": "÷",
+    "checkmark": "✓",
+    "cos": "cos",
+    "sin": "sin",
+    "tan": "tan",
+    "log": "log",
+    "ln": "ln",
     "textregistered": "®",
 }
 
@@ -653,13 +668,46 @@ def translate_script_text(value, mapping):
     return translated
 
 
-def latex_scripts_to_unicode(text):
+def unwrap_redundant_latex_groups(value, max_depth=8):
+    """Remove whole-value brace wrappers emitted redundantly by OCR models."""
+    value = str(value or "").strip()
+    for _ in range(max_depth):
+        if not value.startswith("{"):
+            break
+        group = read_latex_group(value, 0)
+        if group is None:
+            break
+        content, next_index, closed = group
+        if not closed or next_index != len(value):
+            break
+        value = content.strip()
+    return value
+
+
+def collapse_nested_latex_script_groups(text):
+    """Turn OCR forms such as ^{{3}} and _{{-1}} into ordinary groups."""
     text = str(text or "")
+    atomic = r"[^{}\n]{1,24}"
+    for _ in range(8):
+        updated = re.sub(
+            rf"([\^_])\s*\{{\s*\{{\s*({atomic})\s*\}}\s*\}}",
+            r"\1{\2}",
+            text,
+        )
+        if updated == text:
+            break
+        text = updated
+    return text
+
+
+def latex_scripts_to_unicode(text):
+    text = collapse_nested_latex_script_groups(text)
 
     def replace_braced(match):
         base = match.group(1)
         marker = match.group(2)
-        value = re.sub(r"\s+", "", match.group(3))
+        value = unwrap_redundant_latex_groups(match.group(3))
+        value = re.sub(r"\s+", "", value)
         mapping = SUPERSCRIPT_MAP if marker == "^" else SUBSCRIPT_MAP
         translated = translate_script_text(value, mapping)
         if translated is None:
@@ -691,6 +739,27 @@ def latex_scripts_to_unicode(text):
         replace_braced,
         text,
     )
+
+    def replace_standalone_braced(match):
+        marker = match.group(1)
+        value = unwrap_redundant_latex_groups(match.group(2))
+        value = re.sub(r"\s+", "", value)
+        mapping = SUPERSCRIPT_MAP if marker == "^" else SUBSCRIPT_MAP
+        translated = translate_script_text(value, mapping)
+        if translated is not None:
+            return translated
+        # PaddleOCR-VL emits the three-star editorial marker as the malformed
+        # base-less expression ^{{**}}. Retaining the caret as a visible star
+        # reconstructs the source marker instead of leaking TeX punctuation.
+        if marker == "^" and re.fullmatch(r"\*{1,4}", value):
+            return "*" + value
+        return value
+
+    text = re.sub(
+        r"(?<![A-Za-zΑ-ω0-9\)\]])([\^_])\s*\{\s*([^{}\n]{1,24})\s*\}",
+        replace_standalone_braced,
+        text,
+    )
     text = re.sub(
         r"([A-Za-zΑ-ω0-9\)\]])\s*([\^_])\s*([+\-]?[0-9]{1,12})",
         replace_unbraced_number,
@@ -701,6 +770,105 @@ def latex_scripts_to_unicode(text):
         replace_single,
         text,
     )
+    return text
+
+
+def replace_ocr_latex_hallucinations(text):
+    """Repair high-confidence model encodings whose literal TeX is incorrect."""
+    text = str(text or "")
+    # In Greek scholarly entries Paddle substitutes commands for the omitted
+    # initial alpha with psili/oxia. Keep this contextual so genuine mathring
+    # and checkmark commands elsewhere retain their normal meaning.
+    # The real Paddle payload can wrap only the hallucinated command in its own
+    # math delimiters (``$ \\mathring{A} $τομοι``). Consume that wrapper and
+    # the split word together so later dollar stripping cannot leave ``Å τομοι``
+    # or ``✓ τομα`` behind.
+    text = re.sub(
+        r"\$\s*\\mathring\s*\{\s*A\s*\}\s*\$\s*τομοι\b",
+        "Ἄτομοι",
+        text,
+    )
+    text = re.sub(
+        r"\$\s*\\checkmark\s*\$\s*τομα\b",
+        "ἄτομα",
+        text,
+    )
+    text = re.sub(r"\\mathring\s*\{\s*A\s*\}\s*τομοι\b", "Ἄτομοι", text)
+    text = re.sub(r"\\checkmark\s*τομα\b", "ἄτομα", text)
+    return text
+
+
+def normalize_ocr_editorial_angle_markers(text):
+    """Recover editorial angle brackets misread as command backslashes."""
+    text = str(text or "")
+
+    def replace_wrapped(match):
+        word = match.group(1)
+        if word in LATEX_FALLBACK_COMMANDS:
+            return match.group(0)
+        return f"⟨{word}⟩"
+
+    text = re.sub(
+        r"\\([A-Za-zÀ-ÖØ-öø-ÿ]{3,}(?:\[[^\]\n]{1,24}\])?)\\",
+        replace_wrapped,
+        text,
+    )
+    # A closing angle is occasionally omitted while the correction suffix is
+    # retained, as in the real OCR form ``\\gegenübe[r]``.
+    text = re.sub(
+        r"\\([A-Za-zÀ-ÖØ-öø-ÿ]{3,}\[[^\]\n]{1,24}\])",
+        lambda match: (
+            match.group(0)
+            if match.group(1).split("[", 1)[0] in LATEX_FALLBACK_COMMANDS
+            else f"⟨{match.group(1)}⟩"
+        ),
+        text,
+    )
+    return text
+
+
+def strip_suspicious_ocr_braces(text):
+    """Remove nested or unmatched brace debris without touching balanced prose."""
+    text = str(text or "")
+
+    def grouped_number(match):
+        base = match.group(1)
+        value = re.sub(r"\s+", "", match.group(2))
+        translated = translate_script_text(value, SUPERSCRIPT_MAP)
+        return base + translated if translated is not None else match.group(0)
+
+    text = re.sub(
+        r"([A-Za-zΑ-ω0-9\)\]])\s*\{\{\s*([+\-]?[0-9]{1,12})\s*\}\}",
+        grouped_number,
+        text,
+    )
+    # Only repeated braces are treated as OCR debris here. A normal balanced
+    # single-brace expression remains available to legitimate prose/math.
+    for pattern in (
+        r"\{\{([^{}\n]{1,240})\}\}",
+        r"\{\{([^{}\n]{1,240})\}",
+        r"\{([^{}\n]{1,240})\}\}",
+    ):
+        for _ in range(4):
+            updated = re.sub(pattern, r"\1", text)
+            if updated == text:
+                break
+            text = updated
+    text = re.sub(r"\{{2,}|\}{2,}", "", text)
+
+    stack = []
+    remove = set()
+    for index, char in enumerate(text):
+        if char == "{" and (index == 0 or text[index - 1] != "\\"):
+            stack.append(index)
+        elif char == "}" and (index == 0 or text[index - 1] != "\\"):
+            if stack:
+                stack.pop()
+            else:
+                remove.add(index)
+    remove.update(stack)
+    if remove:
+        text = "".join(char for index, char in enumerate(text) if index not in remove)
     return text
 
 
@@ -754,6 +922,20 @@ def normalize_generic_latex_fractions(text):
 
 LATEX_FRACTION_COMMANDS = {"frac", "dfrac", "tfrac"}
 LATEX_TEXT_COMMANDS = {"text", "mathrm", "mathbf", "mathit", "mathsf", "operatorname"}
+LATEX_SCRIPT_COMMANDS = {"textsuperscript", "textsubscript"}
+LATEX_ACCENT_COMMANDS = {
+    "mathring": "\u030a",
+    "ring": "\u030a",
+    "breve": "\u0306",
+    "vec": "\u20d7",
+    "hat": "\u0302",
+    "bar": "\u0304",
+    "dot": "\u0307",
+    "ddot": "\u0308",
+    "tilde": "\u0303",
+    "acute": "\u0301",
+    "grave": "\u0300",
+}
 LATEX_LAYOUT_COMMANDS = {
     "left", "right", "bigl", "bigr", "Bigl", "Bigr", "big", "Big",
     "displaystyle", "textstyle", "scriptstyle", "scriptscriptstyle",
@@ -777,6 +959,8 @@ LATEX_VULGAR_FRACTION_MAP = {
 LATEX_FALLBACK_COMMANDS = (
     LATEX_FRACTION_COMMANDS
     | LATEX_TEXT_COMMANDS
+    | LATEX_SCRIPT_COMMANDS
+    | set(LATEX_ACCENT_COMMANDS)
     | LATEX_LAYOUT_COMMANDS
     | LATEX_SPACE_COMMANDS
     | set(LATEX_SYMBOL_MAP)
@@ -860,6 +1044,13 @@ def linearize_latex_commands(text, depth=0):
         next_index = index + 1 + len(raw_command)
         argument_index = skip_latex_space(text, next_index)
 
+        if command == "n":
+            # Some OCR JSON payloads contain a literal two-character ``\\n``
+            # instead of an actual line break.
+            output.append(" ")
+            index = next_index
+            continue
+
         if command in LATEX_FRACTION_COMMANDS:
             numerator_group = read_latex_group(text, argument_index)
             if numerator_group is None:
@@ -905,6 +1096,36 @@ def linearize_latex_commands(text, depth=0):
                 index = after_group
                 continue
 
+        if command in LATEX_SCRIPT_COMMANDS:
+            group = read_latex_group(text, argument_index)
+            if group is not None:
+                content, after_group, _closed = group
+                content = linearize_latex_commands(content, depth + 1).strip()
+                mapping = SUPERSCRIPT_MAP if command == "textsuperscript" else SUBSCRIPT_MAP
+                translated = translate_script_text(re.sub(r"\s+", "", content), mapping)
+                output.append(translated if translated is not None else content)
+                index = after_group
+                continue
+            existing_script = re.match(
+                rf"[{re.escape(SCRIPT_FORM_CHARS)}]+",
+                text[argument_index:],
+            )
+            if existing_script:
+                output.append(existing_script.group(0))
+                index = argument_index + len(existing_script.group(0))
+                continue
+
+        if command in LATEX_ACCENT_COMMANDS:
+            group = read_latex_group(text, argument_index)
+            if group is not None:
+                content, after_group, _closed = group
+                content = linearize_latex_commands(content, depth + 1).strip()
+                output.append(
+                    unicodedata.normalize("NFC", content + LATEX_ACCENT_COMMANDS[command])
+                )
+                index = after_group
+                continue
+
         if command in {"begin", "end"}:
             group = read_latex_group(text, argument_index)
             index = group[1] if group is not None else next_index
@@ -916,8 +1137,13 @@ def linearize_latex_commands(text, depth=0):
             output.append(LATEX_OPERATOR_MAP[command])
         elif command in LATEX_SPACE_COMMANDS:
             output.append(" ")
-        # Unknown and layout-only commands are intentionally discarded. Any
-        # following braced payload is handled by the next loop iteration.
+        elif command not in LATEX_LAYOUT_COMMANDS:
+            # A true unknown command with a braced payload is most likely a
+            # style macro, so keep its payload but discard the macro name. An
+            # unbraced unknown is often OCR prose misread as a command; retain
+            # the word so normalization never silently deletes source text.
+            if argument_index >= len(text) or text[argument_index] != "{":
+                output.append(command)
         index = next_index
 
     return "".join(output)
@@ -945,24 +1171,25 @@ def strip_paired_latex_dollar_delimiters(text):
 
 
 def contains_latex_fallback_command(text):
-    for match in re.finditer(r"\\([A-Za-z]+)\*?", str(text or "")):
-        if match.group(1) in LATEX_FALLBACK_COMMANDS:
-            return True
-    return False
+    return bool(re.search(r"\\(?:[A-Za-z]+\*?|[,;:!])", str(text or "")))
 
 
 def normalize_safe_latex_markup(text):
     text = str(text or "")
+    text = replace_ocr_latex_hallucinations(text)
+    text = normalize_ocr_editorial_angle_markers(text)
     should_linearize_commands = contains_latex_fallback_command(text)
     text = strip_paired_latex_dollar_delimiters(text)
     text = text.replace("\\(", "").replace("\\)", "").replace("\\[", "").replace("\\]", "")
-    text = unwrap_latex_text_commands(text)
     text = latex_scripts_to_unicode(text)
-    # Parse commands before the generic word{number}->superscript heuristic;
-    # otherwise a valid command such as \\frac{900}{4006} is misread as the
-    # word "frac" followed by a grouped exponent.
+    # Parse the complete command stream before unwrapping style commands or
+    # applying the generic word{number}->superscript heuristic. If a style
+    # command is removed first, adjacent input such as
+    # ``\\cdot\\operatorname{Cos.}`` collapses to ``\\cdotCos.`` and the
+    # parser can no longer distinguish the symbol command from its payload.
     if should_linearize_commands:
         text = linearize_latex_commands(text)
+    text = unwrap_latex_text_commands(text)
     text = re.sub(
         r"([A-Za-zΑ-ω]{2,})\s*\{\s*([0-9]{1,3})\s*\}",
         latex_grouped_number_to_superscript,
@@ -971,6 +1198,10 @@ def normalize_safe_latex_markup(text):
     text = replace_latex_symbols(text)
     text = re.sub(r"\\(?:left|right|bigl|bigr|Bigl|Bigr|big|Big|displaystyle|textstyle)\b", "", text)
     text = normalize_fraction_markup(text)
+    text = latex_scripts_to_unicode(text)
+    text = strip_suspicious_ocr_braces(text)
+    text = re.sub(r"⟨\s+", "⟨", text)
+    text = re.sub(r"\s+⟩", "⟩", text)
     return text
 
 
@@ -1077,6 +1308,18 @@ def formula_to_unicode_if_simple(text):
     )
     if any(command in source for command in complex_commands):
         return None
+    script_source = collapse_nested_latex_script_groups(source)
+    for match in re.finditer(
+        r"([\^_])\s*\{\s*([^{}\n]{1,24})\s*\}",
+        script_source,
+    ):
+        marker, value = match.groups()
+        mapping = SUPERSCRIPT_MAP if marker == "^" else SUBSCRIPT_MAP
+        if translate_script_text(re.sub(r"\s+", "", value), mapping) is None:
+            # Preserve complex subscripts such as k_{\mu} and S_{F} for the
+            # vector formula renderer. Plain-text hardening must not make a
+            # lossy linearization look deceptively complete.
+            return None
     simplified = linearize_latex_formula(source)
     if not simplified:
         return None
@@ -1281,7 +1524,8 @@ def draw_formula_crop_fallback(c, page_height, rect, block):
 def render_formula_block(c, page_height, rect, block, formula_work_dir, allow_image_fallback=True):
     source = formula_source_text(block)
     simple = formula_to_unicode_if_simple(source)
-    if simple:
+    has_unsupported_vector_combining_mark = bool(simple and "\u20d7" in simple)
+    if simple and not has_unsupported_vector_combining_mark:
         fontsize = float(block.get("font_size", max(5.0, rect.height * 0.55)))
         min_size = float(block.get("min_font_size", max(3.2, fontsize * 0.72)))
         line_height = float(block.get("line_height", 1.0))
@@ -1298,17 +1542,36 @@ def render_formula_block(c, page_height, rect, block, formula_work_dir, allow_im
             block["formula_render_mode"] = "unicode_text"
             return True
 
-    cache_dir = block.get("formula_cache_dir") or formula_work_dir
-    try:
-        svg_path = render_latex_formula_to_svg(source, cache_dir)
-        if draw_svg_in_rect(c, page_height, rect, svg_path):
-            reportlab_draw_hidden_plain_text(c, page_height, rect, source)
-            block["formula_render_mode"] = "latex_svg"
-            return True
-    except Exception as exc:
-        block["formula_render_error"] = str(exc)
+    # U+20D7 (COMBINING RIGHT ARROW ABOVE) is not available in the bundled
+    # text fonts and therefore rendered as a visible tofu square.  It is also
+    # a common PaddleOCR confusion for a scanned superscript.  The image
+    # variant can preserve the exact source crop; the text-only variant uses
+    # an explicit vec(...) spelling instead of emitting a missing glyph.
+    if has_unsupported_vector_combining_mark and allow_image_fallback:
+        try:
+            if draw_formula_crop_fallback(c, page_height, rect, block):
+                block["formula_render_mode"] = "image_crop"
+                block["formula_crop_reason"] = "unsupported_combining_vector_mark"
+                return True
+        except Exception as exc:
+            block["formula_render_error"] = str(exc)
 
-    linear = linearize_latex_formula(source)
+    if not has_unsupported_vector_combining_mark:
+        cache_dir = block.get("formula_cache_dir") or formula_work_dir
+        try:
+            svg_path = render_latex_formula_to_svg(source, cache_dir)
+            if draw_svg_in_rect(c, page_height, rect, svg_path):
+                reportlab_draw_hidden_plain_text(c, page_height, rect, source)
+                block["formula_render_mode"] = "latex_svg"
+                return True
+        except Exception as exc:
+            block["formula_render_error"] = str(exc)
+
+    if has_unsupported_vector_combining_mark:
+        safe_source = re.sub(r"\\vec\s*\{\s*([^{}]+?)\s*\}", r"vec(\1)", source)
+        linear = linearize_latex_formula(safe_source)
+    else:
+        linear = linearize_latex_formula(source)
 
     if linear:
         fontsize = float(block.get("font_size", max(5.0, rect.height * 0.55)))
@@ -1546,6 +1809,10 @@ def normalize_draw_segment_text(text, strip_markdown=True):
     if strip_markdown:
         text = strip_markdown_inline(text)
     text = re.sub(r"[ \t\r\f\v]+", " ", text)
+    if LATEX_RESIDUE_RE.search(text):
+        text = normalize_ocr_markup_text(linearize_latex_formula(text))
+    if LATEX_RESIDUE_RE.search(text):
+        raise RuntimeError(f"LaTeX residue remains at PDF draw boundary: {text[:160]!r}")
     return strip_control_chars(text)
 
 

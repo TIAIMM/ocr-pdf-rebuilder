@@ -22,8 +22,11 @@ never be staged.
 6. Rebuild page-aligned PDFs with ReportLab.
 7. Keep unusable fallback pages blank in the text-only PDF and render the source
    page only in the optional image variant.
-8. Validate page count, images, blank fallback pages, text residues and artifact
-    integrity before writing completed state.
+8. Overlay the original scans with an invisible OCR text layer to build the
+   always-produced searchable variant.
+9. Validate page count, images, blank fallback pages, text residues, searchable
+   text presence and pixel identity, and artifact integrity before writing
+   completed state.
 
 ## Stability invariants
 
@@ -36,9 +39,14 @@ never be staged.
 - Completed output reuse requires all artifact signatures and page counts.
 - Text-only output never silently embeds source-page raster images.
 - Both output variants preserve source page count, including trailing blanks.
+- The searchable variant preserves source page count and rendered pixels; its
+  invisible layer only adds extractable text.
 
 MinerU additionally chunks long PDFs and prefers `_middle.json` block/line/span
-data. All chunks and repair passes for one document share one lazy preloaded
+data. It also emits the searchable variant, which places invisible text from
+those span/line boxes onto the untouched source pages and validates page count,
+text presence and pixel identity against the source. All chunks and repair
+passes for one document share one lazy preloaded
 `mineru-api` process at concurrency one. The API is connected to an official
 stdin-EOF shutdown channel and owns a process group; transient CUDA/vLLM engine
 death restarts that whole service within a bounded retry budget. PaddleOCR-VL

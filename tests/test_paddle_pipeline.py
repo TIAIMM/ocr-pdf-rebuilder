@@ -17,6 +17,9 @@ from ocr_pdf_rebuilder import paddle_pipeline, paddle_worker
 
 
 class PaddlePipelineTests(unittest.TestCase):
+    def test_paddle_model_protocol_version_is_supported(self):
+        self.assertIn(paddle_pipeline.PADDLE_PIPELINE_VERSION, {"v1", "v1.5", "v1.6"})
+
     def test_completion_state_records_implementation_identity(self):
         captured = {}
         implementation = {"schema": 1, "files_sha256": "c" * 64, "files": []}

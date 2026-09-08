@@ -448,6 +448,21 @@ class GuiController:
                 page_total=total,
             )
             return
+        if "Rendering searchable OCR-layer PDF:" in line:
+            self._set_progress(record, stage="生成原版隐形文字层 PDF", percent=98.0, page_current=0)
+            return
+        match = re.search(r"(Searchable PDF|Validate searchable PDF) page (\d+)/(\d+)", line)
+        if match:
+            validating = match.group(1).startswith("Validate")
+            current, total = int(match.group(2)), int(match.group(3))
+            if total > 0:
+                self._set_progress(
+                    record,
+                    stage="验证原版隐形文字层 PDF" if validating else "生成原版隐形文字层 PDF",
+                    percent=(98.8 if validating else 98.0) + 0.8 * current / total,
+                    page_current=current, page_total=total,
+                )
+            return
         if line.startswith("QC report:"):
             self._set_progress(record, stage="生成并验证 QC", percent=98.0)
             return

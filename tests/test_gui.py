@@ -57,6 +57,26 @@ class GuiControllerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "没有 PDF"):
             controller.start()
 
+    def test_searchable_progress_is_visible_until_completion(self):
+        controller = self.controller([sys.executable, "-c", "pass"])
+        controller._reset_file_progress([{"name": "sample.pdf"}])
+        for line in (
+            "[1/1] Start: sample.pdf", "Pages: 10",
+            "Rendering searchable OCR-layer PDF: sample_searchable.pdf",
+            "Searchable PDF page 5/10",
+        ):
+            controller._consume_progress_line(line)
+        record = controller.status()["file_progress"][0]
+        self.assertEqual(record["stage"], "生成原版隐形文字层 PDF")
+        self.assertEqual(record["page_current"], 5)
+        self.assertAlmostEqual(record["percent"], 98.4)
+        controller._consume_progress_line("Validate searchable PDF page 10/10")
+        record = controller.status()["file_progress"][0]
+        self.assertEqual(record["stage"], "验证原版隐形文字层 PDF")
+        self.assertLess(record["percent"], 100)
+        controller._consume_progress_line("[5/5] Done")
+        self.assertEqual(controller.status()["file_progress"][0]["percent"], 100)
+
     def test_child_path_prioritizes_current_python_environment(self):
         env = GuiController._source_environment()
         first_path = Path(env["PATH"].split(os.pathsep, 1)[0])

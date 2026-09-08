@@ -1,13 +1,13 @@
 {
   "schema": 2,
-  "captured_at": "2026-08-23T02:57:52.159058+00:00",
+  "captured_at": "2026-09-05T08:42:11.474540+00:00",
   "repository_path": "src/ocr_pdf_rebuilder",
   "package_identity": {
     "schema": 1,
     "algorithm": "sha256-canonical-file-manifest-v1",
     "package": "ocr_pdf_rebuilder",
-    "file_count": 27,
-    "files_sha256": "b374a0dbe66786297e9b9cf0b1b369f225714591e5628962774a88417fc7b8f2",
+    "file_count": 28,
+    "files_sha256": "14a1fed065eb5d785bb00dd9a9f7c9bdea3c7283e3929be45c3e7d11d608b408",
     "files": [
       {
         "path": "__init__.py",
@@ -36,8 +36,8 @@
       },
       {
         "path": "gui.py",
-        "size": 44577,
-        "sha256": "83c85d73021dee8579dd6ff7da535d0548d18a582ccb345e4aad0d98c06fa961"
+        "size": 45394,
+        "sha256": "7d195665567e4cd99e7f20d6f76ea2e4addd916e53f6a45eb01faca77c9ce834"
       },
       {
         "path": "layout_engine.py",
@@ -66,8 +66,8 @@
       },
       {
         "path": "paddle_pipeline.py",
-        "size": 44343,
-        "sha256": "e87c1f939d14437a8dc2f726a850b46adc566689bede6d0090dd209dc1475ae6"
+        "size": 45893,
+        "sha256": "d5ac16f8e1bfedddaac0be05083357d27204c81b3b6c33103ad2f0bb7d84400d"
       },
       {
         "path": "paddle_textonly_pdf.py",
@@ -96,8 +96,8 @@
       },
       {
         "path": "pipeline_orchestrator.py",
-        "size": 16785,
-        "sha256": "ed582e7af5127b160c583bff0dfa9c614b1cbd7456673b0c16e6144f362a219e"
+        "size": 16036,
+        "sha256": "5674fb1c3707657716fbb19d425c34bce9888c68f062417e9a15506c86f024e7"
       },
       {
         "path": "pipeline_runtime.py",
@@ -125,9 +125,14 @@
         "sha256": "b002e2871c8ac0d39cd3cd1b139cbf658cb1554f6f11b0ce0783a623add40bdb"
       },
       {
+        "path": "searchable_backfill.py",
+        "size": 3503,
+        "sha256": "2bb1657a8d6d1fbcac6843bff7972a81b1e2c5b0477e9c8315133e620b090553"
+      },
+      {
         "path": "searchable_pdf.py",
-        "size": 10513,
-        "sha256": "dd378957fb1c993ac3e0b91e8569b03ac9317c131dc54ffdb7a269f3ce967466"
+        "size": 12844,
+        "sha256": "e9f9629d1c728d0802af09fca1f51976dd50c1229ac609a36c1149d600a8b9ad"
       },
       {
         "path": "signal_cleanup.py",

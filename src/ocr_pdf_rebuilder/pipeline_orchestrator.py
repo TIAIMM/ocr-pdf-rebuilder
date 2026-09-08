@@ -335,28 +335,11 @@ def process_pdf(pdf_path, index, total):
         output_image_pdf.unlink()
         log(f"    Removed stale image variant because this run has no fallback pages: {output_image_pdf}")
 
-    log(f"    Rendering searchable OCR-layer PDF: {output_searchable_pdf}")
-    searchable_stats = build_searchable_pdf(
+    searchable_stats = build_validated_searchable_pdf(
         pdf_path,
         page_results,
         output_searchable_pdf,
-        progress_callback=lambda current, total: log(
-            f"        Searchable PDF page {current}/{total}"
-        ),
     )
-    searchable_validation_scan = scan_pdf_validation(
-        output_searchable_pdf,
-        progress_callback=lambda current, total: log(
-            f"        Validate searchable PDF page {current}/{total}"
-        ),
-    )
-    validate_pdf_page_count(output_searchable_pdf, page_count, searchable_validation_scan)
-    validate_searchable_pdf_text_presence(
-        output_searchable_pdf,
-        searchable_stats["text_page_indexes"],
-        searchable_validation_scan,
-    )
-    validate_searchable_pdf_visual_identity(pdf_path, output_searchable_pdf)
 
     write_mineru_qc_report(
         pdf_path,

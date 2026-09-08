@@ -83,7 +83,7 @@ class SearchablePdfTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def test_build_places_invisible_text_and_preserves_pixels(self):
+    def test_build_places_selectable_text_under_scan_and_preserves_pixels(self):
         make_scanned_source(self.source, pages=3)
         cell = span_cell(
             [40, 50, 260, 110],
@@ -112,7 +112,11 @@ class SearchablePdfTests(unittest.TestCase):
             self.assertIn("1983", text)
             self.assertEqual(doc[1].get_text().strip(), "")
             self.assertEqual(doc[2].get_text().strip(), "")
-            self.assertIn(b"3 Tr", page_stream_bytes(doc, 0))
+            content = page_stream_bytes(doc, 0)
+            self.assertIn(b"0 Tr", content)
+            self.assertNotIn(b"3 Tr", content)
+            self.assertLess(content.find(b"0 Tr"), content.find(b"/fzImg0 Do"))
+            self.assertTrue(all(span["type"] == 0 for span in doc[0].get_texttrace()))
 
         for index in range(3):
             self.assertEqual(

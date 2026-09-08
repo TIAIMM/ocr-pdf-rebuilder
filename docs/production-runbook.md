@@ -134,3 +134,24 @@ During step 4, the log and GUI must advance through `Render text PDF page`,
 PDF page` plus `Validate image PDF page`, each with current/total page counts.
 The searchable variant then logs `Searchable PDF page` and `Validate searchable
 PDF page` with the same current/total convention.
+
+## Backfill an existing Paddle searchable PDF
+
+After deploying the current package, reuse source-bound page JSON without
+starting PaddleOCR or vLLM:
+
+```bash
+OCR_RUNTIME_ROOT="$PWD" PYTHONPATH=.production/src "$HOME/miniconda3/envs/mineru/bin/python" \
+  -m ocr_pdf_rebuilder.searchable_backfill input/book.pdf
+```
+
+Use `--runtime-root /path/to/runtime` for another runtime tree, and `--output`
+for another destination. A relocated original PDF is accepted only if its
+content matches the recorded OCR source. Missing pages, invalid provenance and
+an occupied task lock stop the operation without deleting cached OCR. The
+generated overlay is checked before replacing the destination. Its separate
+`book_paddle_searchable.version` records the original OCR producer and current
+overlay producer; older full-pipeline completion records are not upgraded.
+Ordinary full reruns still enforce code-version-bound cache reuse and may
+discard incompatible caches, so use this entry point when only the overlay is
+missing. GUI progress now displays overlay generation and validation separately.

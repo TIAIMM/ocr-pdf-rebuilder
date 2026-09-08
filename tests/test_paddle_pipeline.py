@@ -67,6 +67,7 @@ class PaddlePipelineTests(unittest.TestCase):
             )
         self.assertEqual(captured["implementation_identity"], implementation)
         self.assertEqual(captured["implementation_identity_hash"], "c" * 64)
+        self.assertIn("output_searchable_pdf", captured)
 
     def test_explicit_image_bbox_is_scaled_even_when_values_resemble_pdf_units(self):
         cell = {
@@ -307,6 +308,13 @@ class PaddlePipelineTests(unittest.TestCase):
                     output_md,
                 )
             self.assertEqual(fallback_pages, [])
+            searchable = output_pdf.with_name("output_searchable.pdf")
+            with fitz.open(searchable) as overlay:
+                self.assertEqual(overlay.page_count, 2)
+                self.assertIn("Paddle shared renderer", overlay[0].get_text())
+                self.assertEqual(overlay[1].get_text().strip(), "")
+                self.assertTrue(all(span["type"] == 0 for span in overlay[0].get_texttrace()))
+            paddle_pipeline.shared.validate_searchable_pdf_visual_identity(source, searchable)
             with fitz.open(output_pdf) as output:
                 self.assertEqual(output.page_count, 2)
                 self.assertIn("Paddle shared renderer", output[0].get_text())

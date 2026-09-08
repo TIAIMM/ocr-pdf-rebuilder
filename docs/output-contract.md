@@ -1,5 +1,10 @@
 # Output contract
 
+Both engines always produce a searchable PDF. Paddle uses the corresponding
+`book_paddle_searchable.pdf` name alongside `book_paddle.pdf` and
+`book_paddle.md`. Its completion record and QC report require this artifact too.
+The image variant remains conditional on fallback pages.
+
 For an input named `book.pdf`, successful processing creates:
 
 - `book_mineru.pdf`: text-only reconstructed PDF;

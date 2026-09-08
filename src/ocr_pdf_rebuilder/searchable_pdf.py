@@ -1,4 +1,4 @@
-"""Searchable OCR-layer PDF: original scans plus invisible text (render mode 3)."""
+"""Searchable OCR-layer PDF: original scans over ordinary selectable text."""
 
 import hashlib
 import os
@@ -15,7 +15,7 @@ SEARCHABLE_MIN_RECT_POINTS = 1.0
 SEARCHABLE_MIN_FONT_SIZE = 0.1
 SEARCHABLE_VISUAL_SAMPLE_LIMIT = 12
 SEARCHABLE_VISUAL_VALIDATION_DPI = 72
-SEARCHABLE_INVISIBLE_RENDER_MODE = 3
+SEARCHABLE_TEXT_RENDER_MODE = 0
 
 
 def _searchable_rect_from_bbox(bbox, scale_x, scale_y):
@@ -185,7 +185,23 @@ def build_searchable_pdf(source_pdf_path, page_results, output_pdf_path, progres
                         if _searchable_place_text(writer, rect, text, fonts):
                             placed += 1
                     if placed:
-                        writer.write_text(page, render_mode=SEARCHABLE_INVISIBLE_RENDER_MODE)
+                        # WPS indexes render-mode 3 text but does not reliably expose it
+                        # to rectangular mouse selection.  Paint ordinary text first and
+                        # keep an opaque paper layer and the source scan above it: the page
+                        # remains visually identical even when a scan uses transparency,
+                        # while viewers can hit-test the OCR glyph geometry.  PyMuPDF
+                        # prepends each overlay=False operation, so draw the paper first.
+                        page.draw_rect(
+                            page.rect,
+                            color=None,
+                            fill=(1, 1, 1),
+                            overlay=False,
+                        )
+                        writer.write_text(
+                            page,
+                            render_mode=SEARCHABLE_TEXT_RENDER_MODE,
+                            overlay=False,
+                        )
             if placed:
                 stats["text_page_indexes"].append(page_index)
                 stats["spans_placed"] += placed
@@ -210,6 +226,40 @@ def build_searchable_pdf(source_pdf_path, page_results, output_pdf_path, progres
                 pass
             raise
     return stats
+
+
+def build_validated_searchable_pdf(source_pdf_path, page_results, output_pdf_path):
+    """Publish the overlay only after all searchable-specific checks pass."""
+    output_pdf_path = Path(output_pdf_path)
+    output_pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(
+        prefix=f".{output_pdf_path.stem}.validate-", suffix=".tmp",
+        dir=output_pdf_path.parent,
+    )
+    os.close(fd)
+    temporary = Path(temporary)
+    log(f"    Rendering searchable OCR-layer PDF: {output_pdf_path}")
+    try:
+        stats = build_searchable_pdf(
+            source_pdf_path, page_results, temporary,
+            progress_callback=lambda current, total: log(
+                f"        Searchable PDF page {current}/{total}"
+            ),
+        )
+        scan = scan_pdf_validation(
+            temporary,
+            progress_callback=lambda current, total: log(
+                f"        Validate searchable PDF page {current}/{total}"
+            ),
+        )
+        validate_pdf_page_count(temporary, stats["pages"], scan)
+        validate_searchable_pdf_text_presence(temporary, stats["text_page_indexes"], scan)
+        validate_searchable_pdf_visual_identity(source_pdf_path, temporary)
+        os.replace(temporary, output_pdf_path)
+        log(f"    Saved searchable variant: {output_pdf_path}")
+        return stats
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def searchable_visual_sample_indexes(page_count, limit=SEARCHABLE_VISUAL_SAMPLE_LIMIT):
@@ -283,8 +333,9 @@ _COMPONENT_EXPORTS = (
     "SEARCHABLE_MIN_FONT_SIZE",
     "SEARCHABLE_VISUAL_SAMPLE_LIMIT",
     "SEARCHABLE_VISUAL_VALIDATION_DPI",
-    "SEARCHABLE_INVISIBLE_RENDER_MODE",
+    "SEARCHABLE_TEXT_RENDER_MODE",
     "build_searchable_pdf",
+    "build_validated_searchable_pdf",
     "searchable_visual_sample_indexes",
     "validate_searchable_pdf_text_presence",
     "validate_searchable_pdf_visual_identity",

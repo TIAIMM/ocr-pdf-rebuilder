@@ -70,7 +70,7 @@ PADDLE_DPI = shared.DPI
 PADDLE_PROCESS_TIMEOUT_SECONDS = 24 * 60 * 60
 PADDLE_PROCESS_IDLE_TIMEOUT_SECONDS = 30 * 60
 PADDLE_PROCESS_TERMINATE_GRACE_SECONDS = 20
-OUTPUT_VERSION = "paddleocr-vl-1.6-reportlab-latex-layout-hardening-v10"
+OUTPUT_VERSION = "paddleocr-vl-1.6-reportlab-searchable-v12-wps-selectable-underlay"
 CHECKPOINT_SCHEMA = 1
 SKIP_EXISTING = True
 
@@ -245,6 +245,7 @@ def completion_matches(
     output_pdf: Path,
     output_md: Path,
     output_image_pdf: Path,
+    output_searchable_pdf: Path | None = None,
 ) -> bool:
     state = shared.read_checkpoint(state_path)
     if not state:
@@ -262,18 +263,31 @@ def completion_matches(
     paths = {
         "output_pdf": output_pdf,
         "output_md": output_md,
+        "output_searchable_pdf": output_searchable_pdf or output_pdf.with_name(
+            f"{output_pdf.stem}_searchable.pdf"
+        ),
     }
     if state.get("has_image_variant"):
         paths["output_image_pdf"] = output_image_pdf
+    try:
+        with fitz.open(source_pdf) as document:
+            page_count = document.page_count
+    except (OSError, RuntimeError, ValueError):
+        return False
     for key, path in paths.items():
         if not path.is_file():
             return False
-        signature = (
-            shared.pdf_artifact_signature(path)
-            if path.suffix.lower() == ".pdf"
-            else shared.file_integrity_signature(path)
-        )
+        try:
+            signature = (
+                shared.pdf_artifact_signature(path)
+                if path.suffix.lower() == ".pdf"
+                else shared.file_integrity_signature(path)
+            )
+        except (OSError, RuntimeError, ValueError):
+            return False
         if state.get(key) != signature:
+            return False
+        if path.suffix.lower() == ".pdf" and signature.get("page_count") != page_count:
             return False
     return True
 
@@ -285,6 +299,7 @@ def write_completion_state(
     output_md: Path,
     output_image_pdf: Path,
     image_fallback_pages: list[int],
+    output_searchable_pdf: Path | None = None,
 ) -> None:
     paddle_runtime_identity.cache_clear()
     identity = paddle_runtime_identity()
@@ -300,6 +315,9 @@ def write_completion_state(
         "runtime_identity_hash": shared.stable_json_hash(identity),
         "output_pdf": shared.pdf_artifact_signature(output_pdf),
         "output_md": shared.file_integrity_signature(output_md),
+        "output_searchable_pdf": shared.pdf_artifact_signature(
+            output_searchable_pdf or output_pdf.with_name(f"{output_pdf.stem}_searchable.pdf")
+        ),
         "output_image_pdf": (
             shared.pdf_artifact_signature(output_image_pdf)
             if image_fallback_pages
@@ -673,6 +691,7 @@ def write_paddle_qc_report(
     output_image_pdf: Path | None,
     image_fallback_pages: list[int],
     validation_scan: dict[str, object],
+    output_searchable_pdf: Path | None = None,
 ) -> dict[str, object]:
     suspects = shared.collect_qc_suspect_pages(
         pdf_path, page_results, page_specs, len(page_specs)
@@ -682,6 +701,7 @@ def write_paddle_qc_report(
         "pipeline_config": paddle_config(),
         "input_pdf": str(pdf_path),
         "output_text_pdf": str(output_pdf),
+        "output_searchable_pdf": str(output_searchable_pdf) if output_searchable_pdf else None,
         "output_image_pdf": str(output_image_pdf) if output_image_pdf else None,
         "paddle_output_dir": str(raw_dir),
         "source_page_count": len(page_specs),
@@ -757,6 +777,7 @@ def build_outputs(
     output_pdf: Path,
     output_image_pdf: Path,
     output_md: Path,
+    output_searchable_pdf: Path | None = None,
 ) -> list[int]:
     with fitz.open(pdf_path) as source:
         page_count = source.page_count
@@ -1034,6 +1055,10 @@ def build_outputs(
     elif output_image_pdf.exists():
         output_image_pdf.unlink()
 
+    output_searchable_pdf = output_searchable_pdf or output_pdf.with_name(
+        f"{output_pdf.stem}_searchable.pdf"
+    )
+    shared.build_validated_searchable_pdf(pdf_path, page_results, output_searchable_pdf)
     write_paddle_qc_report(
         pdf_path,
         raw_dir,
@@ -1043,6 +1068,7 @@ def build_outputs(
         output_image_pdf if image_fallback_pages else None,
         image_fallback_pages,
         validation,
+        output_searchable_pdf=output_searchable_pdf,
     )
     shared.validate_pdf_has_no_radicals(output_pdf, validation)
     shared.validate_pdf_has_no_control_chars(output_pdf, validation)
@@ -1056,10 +1082,11 @@ def process_pdf(pdf_path: Path, index: int, total: int) -> dict[str, object]:
     name = pdf_path.stem
     output_pdf = OUTPUT_DIR / f"{name}_paddle.pdf"
     output_image_pdf = OUTPUT_DIR / f"{name}_paddle_with_images.pdf"
+    output_searchable_pdf = OUTPUT_DIR / f"{name}_paddle_searchable.pdf"
     output_md = OUTPUT_DIR / f"{name}_paddle.md"
     output_version = OUTPUT_DIR / f"{name}_paddle.version"
     if SKIP_EXISTING and completion_matches(
-        output_version, pdf_path, output_pdf, output_md, output_image_pdf
+        output_version, pdf_path, output_pdf, output_md, output_image_pdf, output_searchable_pdf
     ):
         state = shared.read_checkpoint(output_version) or {}
         variant = " plus image variant" if state.get("has_image_variant") else ""
@@ -1070,6 +1097,7 @@ def process_pdf(pdf_path: Path, index: int, total: int) -> dict[str, object]:
         return {
             "status": "skipped",
             "output_text_pdf": str(output_pdf),
+            "output_searchable_pdf": str(output_searchable_pdf),
             "output_image_pdf": str(output_image_pdf) if state.get("has_image_variant") else None,
         }
 
@@ -1119,6 +1147,7 @@ def process_pdf(pdf_path: Path, index: int, total: int) -> dict[str, object]:
         output_pdf,
         output_image_pdf,
         output_md,
+        output_searchable_pdf,
     )
     write_completion_state(
         output_version,
@@ -1127,6 +1156,7 @@ def process_pdf(pdf_path: Path, index: int, total: int) -> dict[str, object]:
         output_md,
         output_image_pdf,
         image_fallback_pages,
+        output_searchable_pdf,
     )
     log("    [5/5] Done")
     log(
@@ -1137,6 +1167,7 @@ def process_pdf(pdf_path: Path, index: int, total: int) -> dict[str, object]:
     return {
         "status": "completed",
         "output_text_pdf": str(output_pdf),
+        "output_searchable_pdf": str(output_searchable_pdf),
         "output_image_pdf": str(output_image_pdf) if image_fallback_pages else None,
         "image_fallback_pages": [page + 1 for page in image_fallback_pages],
     }

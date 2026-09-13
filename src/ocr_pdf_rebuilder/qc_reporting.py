@@ -224,7 +224,13 @@ def write_mineru_qc_report(
     image_fallback_pages=None,
     parser_runs=None,
     output_validation_scan=None,
+    image_variant_pages=None,
 ):
+    image_fallback_pages = sorted(set(int(page) for page in (image_fallback_pages or [])))
+    image_variant_pages = sorted(
+        set(image_fallback_pages)
+        | set(int(page) for page in (image_variant_pages or []))
+    )
     sources = mineru_debug_sources(mineru_dir, parser_runs)
     first_source = sources[0] if sources else {}
     layout_pdf = first_source.get("layout_pdf")
@@ -271,7 +277,8 @@ def write_mineru_qc_report(
         "output_text_pdf": str(output_pdf),
         "output_image_pdf": str(output_image_pdf) if output_image_pdf else None,
         "output_searchable_pdf": str(output_searchable_pdf) if output_searchable_pdf else None,
-        "image_fallback_pages": [int(page_index) + 1 for page_index in (image_fallback_pages or [])],
+        "image_fallback_pages": [int(page_index) + 1 for page_index in image_fallback_pages],
+        "image_variant_pages": [int(page_index) + 1 for page_index in image_variant_pages],
         "mineru_output_dir": str(mineru_dir),
         "mineru_sources": source_reports,
         "source_page_count": source_page_count,

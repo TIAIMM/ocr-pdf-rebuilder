@@ -32,7 +32,7 @@ GREEK_ITALIC_FONT = RUNTIME_ROOT / "fonts/DejaVuSerif-Italic.ttf"
 MONO_FONT = RUNTIME_ROOT / "fonts/NotoSansMono-Regular.ttf"
 
 DPI = 200
-OUTPUT_VERSION = "mineru-reportlab-cell-aware-render-v55-searchable-ocr-latex-hardening"
+OUTPUT_VERSION = "mineru-reportlab-cell-aware-render-v56-picture-crops"
 
 # MinerU execution. Leave values as None to keep MinerU's own defaults.
 # When MINERU_API_URL is unset, each document owns one lazy local API process
@@ -159,6 +159,8 @@ REPORTLAB_FONTS_REGISTERED = False
 FORMULA_RENDER_DEPS = None
 FORMULA_RENDER_DPI = 300
 FORMULA_CROP_PADDING = 2.0
+PICTURE_CROP_RENDER_DPI = 300
+PICTURE_CROP_PADDING = 0.0
 PARSER_RETRY_PATTERNS = [
     "cells post process error",
     "JSON parsing failed",
@@ -220,7 +222,7 @@ FONT_TEST_TEXT_RE = re.compile(
     re.IGNORECASE,
 )
 LATEX_RESIDUE_RE = re.compile(
-    r"\\(?:[A-Za-z]+\*?|[,;:!])"
+    r"\\(?:[A-Za-z]+\*?|[,;:!{}$%#&_|])"
     r"|[\^_]\s*\{"
     r"|\{\{|\}\}"
     r"|\${1,2}\s*(?:\\[A-Za-z]+|[\^_{}])"

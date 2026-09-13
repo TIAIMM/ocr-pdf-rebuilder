@@ -180,7 +180,7 @@ class SearchablePdfTests(unittest.TestCase):
             self.assertLessEqual(x1, scaled.x1 + tolerance, word)
             self.assertLessEqual(y1, scaled.y1 + tolerance, word)
 
-    def test_skipped_categories_produce_no_text(self):
+    def test_table_and_picture_are_skipped_but_formula_is_searchable(self):
         make_scanned_source(self.source, pages=1)
         cells = [
             {
@@ -194,8 +194,8 @@ class SearchablePdfTests(unittest.TestCase):
             {
                 "bbox": [40, 120, 260, 160],
                 "category": "Formula",
-                "text": "\\frac{a}{b}",
-                "content": "\\frac{a}{b}",
+                "text": r"W\_G\_W = \frac{a}{b}",
+                "content": r"W\_G\_W = \frac{a}{b}",
                 "__bbox_units": "pdf",
                 "__line_info": [],
             },
@@ -211,11 +211,35 @@ class SearchablePdfTests(unittest.TestCase):
         stats = self.pipeline.build_searchable_pdf(
             self.source, {0: {"cells": cells, "image_size": None}}, self.output
         )
-        self.assertEqual(stats["skipped_category_cells"], 3)
-        self.assertEqual(stats["text_page_indexes"], [])
+        self.assertEqual(stats["skipped_category_cells"], 2)
+        self.assertEqual(stats["text_page_indexes"], [0])
         with fitz.open(self.output) as doc:
-            self.assertEqual(doc[0].get_text().strip(), "")
+            text = doc[0].get_text()
+            self.assertIn("W_G_W", text)
+            self.assertIn("a/b", text)
+            self.assertNotIn(r"\frac", text)
             self.assertNotIn(b"3 Tr", page_stream_bytes(doc, 0))
+
+    def test_text_formula_markers_are_linearized_in_searchable_layer(self):
+        make_scanned_source(self.source, pages=1)
+        cell = {
+            "bbox": [40, 40, 260, 100],
+            "category": "Text",
+            "text": r"Die Bewegung $ W' $ $__G' und \|5\|.",
+            "content": r"Die Bewegung $ W' $ $__G' und \|5\|.",
+            "__bbox_units": "pdf",
+            "__line_info": [],
+        }
+        self.pipeline.build_searchable_pdf(
+            self.source, {0: {"cells": [cell], "image_size": None}}, self.output
+        )
+        with fitz.open(self.output) as doc:
+            text = doc[0].get_text()
+        self.assertIn("Die Bewegung W'", text)
+        self.assertIn("G'", text)
+        self.assertIn("|5|", text)
+        self.assertNotIn("$", text)
+        self.assertNotIn(r"\|", text)
 
     def test_blank_and_missing_pages_get_no_overlay(self):
         make_scanned_source(self.source, pages=3)

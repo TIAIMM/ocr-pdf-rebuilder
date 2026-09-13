@@ -85,6 +85,21 @@ def category_for_label(label: object) -> str:
     return LABEL_CATEGORIES.get(normalized, "Text")
 
 
+def markdown_fragment_for_cell(category: str, content: str) -> str:
+    """Keep Paddle formula cells as explicit Markdown display math."""
+    content = str(content or "").strip()
+    if not content or category != "Formula":
+        return content
+    if (
+        (content.startswith("$$") and content.endswith("$$"))
+        or (content.startswith("$") and content.endswith("$") and not content.startswith("$$"))
+        or (content.startswith("\\[") and content.endswith("\\]"))
+        or (content.startswith("\\(") and content.endswith("\\)"))
+    ):
+        return content
+    return f"$$\n{content}\n$$"
+
+
 def _normalized_block_bbox(block: object) -> list[float] | None:
     if not isinstance(block, dict):
         return None
@@ -267,7 +282,14 @@ def normalized_page_result(
             float(cell["bbox"][0]),
         )
     )
-    markdown = "\n\n".join(str(cell.get("text") or "") for cell in cells if cell.get("text"))
+    markdown = "\n\n".join(
+        markdown_fragment_for_cell(
+            str(cell.get("category") or "Text"),
+            str(cell.get("text") or ""),
+        )
+        for cell in cells
+        if cell.get("text")
+    )
     return {
         "schema": SCHEMA,
         "engine": "PaddleOCR-VL",

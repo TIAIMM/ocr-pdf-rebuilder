@@ -18,7 +18,7 @@ def is_likely_math_text(text):
         return False
     if re.search(r"\s{2,}", text):
         return False
-    if re.fullmatch(r"[A-Za-zΑ-ω]", text):
+    if re.fullmatch(r"[A-Za-zΑ-ω](?:\s*['′″])?", text):
         return True
     if re.search(r"[=+\-*/^_{}\\<>≤≥≈≠∈∉∂√∞∑∏∫]", text):
         return True
@@ -84,7 +84,10 @@ def strip_markdown_inline(text):
     text = re.sub(r"~([^~\n]{1,60}?)~", r"\1", text)
     text = re.sub(r"\^([^^\n]{1,60}?)\^", r"\1", text)
     text = re.sub(r"(?<!\*)\*([^*\n]+?)\*(?!\*)", r"\1", text)
-    text = re.sub(r"(?<!_)_([^_\n]+?)_(?!_)", r"\1", text)
+    # CommonMark does not treat an underscore inside a word as emphasis.  OCR
+    # formulas such as ``W_G_W`` must therefore survive PDF/searchable text
+    # cleanup after LaTeX ``\_`` has been linearized.
+    text = re.sub(r"(?<![\w_])_([^_\n]+?)_(?![\w_])", r"\1", text)
     return text
 
 
@@ -1022,7 +1025,7 @@ def linearize_latex_commands(text, depth=0):
             index += 1
             continue
         escaped = text[index + 1]
-        if escaped in "{}$%#&_":
+        if escaped in "{}$%#&_|":
             output.append(escaped)
             index += 2
             continue
@@ -1171,7 +1174,20 @@ def strip_paired_latex_dollar_delimiters(text):
 
 
 def contains_latex_fallback_command(text):
-    return bool(re.search(r"\\(?:[A-Za-z]+\*?|[,;:!])", str(text or "")))
+    """Return whether text contains markup that must be linearized for PDF text.
+
+    OCR engines commonly escape literal TeX punctuation (``\\_``, ``\\{`` and
+    ``\\$``) or emit a doubled backslash before a command.  Those forms are
+    valid input to the command linearizer even though they do not match the
+    historical command-only detector.  Leaving them behind is especially
+    harmful after Markdown math delimiters have been removed because the PDF
+    validator then sees raw LaTeX residue in ordinary text.
+    """
+    value = str(text or "")
+    return bool(
+        re.search(r"\\(?:[A-Za-z]+\*?|[,;:!{}$%#&_|])", value)
+        or "\\\\" in value
+    )
 
 
 def normalize_safe_latex_markup(text):
@@ -1203,6 +1219,83 @@ def normalize_safe_latex_markup(text):
     text = re.sub(r"⟨\s+", "⟨", text)
     text = re.sub(r"\s+⟩", "⟩", text)
     return text
+
+
+# Markdown math spans are protected while the ordinary OCR cleanup runs.  The
+# cleanup deliberately strips math delimiters for PDF and searchable text,
+# whereas Markdown needs to retain the original LaTeX source.  Keep this
+# scanner conservative: an unmatched dollar sign remains ordinary prose (for
+# example a currency amount), while explicit display/TeX delimiters are always
+# preserved.
+MARKDOWN_LATEX_SPAN_RE = re.compile(
+    r"\$\$.*?\$\$"
+    r"|\\\[.*?\\\]"
+    r"|\\\(.*?\\\)"
+    r"|(?<!\\)\$(?!\$)[^$\n]+?(?<!\\)\$(?!\$)",
+    re.DOTALL,
+)
+MARKDOWN_LATEX_PLACEHOLDER_START = "\ue600"
+MARKDOWN_LATEX_PLACEHOLDER_END = "\ue601"
+
+
+def _markdown_latex_span_source(raw_span):
+    """Return a cleaned Markdown math span, retaining its LaTeX body."""
+    raw_span = str(raw_span or "")
+    if raw_span.startswith("$$") and raw_span.endswith("$$"):
+        opening, closing = "$$", "$$"
+        body = raw_span[2:-2]
+    elif raw_span.startswith("\\[") and raw_span.endswith("\\]"):
+        opening, closing = "\\[", "\\]"
+        body = raw_span[2:-2]
+    elif raw_span.startswith("\\(") and raw_span.endswith("\\)"):
+        opening, closing = "\\(", "\\)"
+        body = raw_span[2:-2]
+    elif raw_span.startswith("$") and raw_span.endswith("$"):
+        opening, closing = "$", "$"
+        body = raw_span[1:-1]
+        # A pair of dollars can be currency or punctuation.  Preserve it as
+        # math only when the body has a recognizable mathematical signal.
+        if not (
+            is_likely_math_text(body)
+            or contains_latex_fallback_command(body)
+            or re.search(r"[=+*/^_{}<>≤≥≈≠∈∉∂√∞∑∏∫]", body)
+        ):
+            return None
+    else:
+        return None
+
+    body = html_lib.unescape(strip_control_chars(body)).strip()
+    if not body:
+        return None
+    return f"{opening}{body}{closing}"
+
+
+def normalize_markdown_latex_text(text):
+    """Normalize OCR prose while preserving explicit Markdown/LaTeX math.
+
+    The returned value is suitable for the generated ``.md`` artifact.  Math
+    delimiters and the LaTeX source inside them survive unchanged apart from
+    control-character removal and surrounding whitespace trimming.  Ordinary
+    prose follows the same cleanup path as :func:`normalize_markdown_text`.
+    """
+    if text is None:
+        return ""
+    preserved = []
+
+    def protect(match):
+        source = _markdown_latex_span_source(match.group(0))
+        if source is None:
+            return match.group(0)
+        index = len(preserved)
+        preserved.append(source)
+        return f"{MARKDOWN_LATEX_PLACEHOLDER_START}{index}{MARKDOWN_LATEX_PLACEHOLDER_END}"
+
+    protected = MARKDOWN_LATEX_SPAN_RE.sub(protect, str(text))
+    normalized = normalize_markdown_text(protected)
+    for index, source in enumerate(preserved):
+        token = f"{MARKDOWN_LATEX_PLACEHOLDER_START}{index}{MARKDOWN_LATEX_PLACEHOLDER_END}"
+        normalized = normalized.replace(token, source)
+    return normalized
 
 
 def clean_latex_source(text):
@@ -1238,6 +1331,21 @@ def linearize_latex_formula(text):
 
 def formula_source_text(block):
     return str(block.get("source_text") or block.get("text") or "")
+
+
+def markdown_formula_block_text(block):
+    """Return a block-level Formula cell as a Markdown display equation."""
+    source = formula_source_text(block) if isinstance(block, dict) else str(block or "")
+    source = html_lib.unescape(strip_control_chars(source)).strip()
+    if not source:
+        return ""
+    body = fully_delimited_math_body(source)
+    if body is None:
+        body = source
+    body = html_lib.unescape(strip_control_chars(body)).strip()
+    if not body:
+        return ""
+    return f"$$\n{body}\n$$"
 
 
 FORMULA_STRUCTURAL_COMMAND_RE = re.compile(
@@ -1621,6 +1729,12 @@ def normalize_ocr_markup_text(text):
     text = normalize_safe_latex_markup(text)
     text = normalize_citation_superscripts(text)
     text = normalize_safe_latex_markup(text)
+    # A malformed OCR formula can leave paired dollar markers or script
+    # punctuation after the safe pass (for example ``$ W' $ $__G'``).  Use
+    # the complete linearizer as a final ordinary-text fallback so every
+    # downstream PDF/searchable path receives the same residue-free text.
+    if LATEX_RESIDUE_RE.search(text):
+        text = linearize_latex_formula(text)
     text = strip_control_chars(text)
     text = normalize_long_dot_leaders(text)
     return collapse_repeated_ocr_text(text)
@@ -1659,7 +1773,7 @@ def extract_html_table_rows(text):
         for cell_match in re.finditer(r"(?is)<t[dh]\b[^>]*>(.*?)</t[dh]\s*>", row_html):
             cell = strip_html_tags(cell_match.group(1))
             cell = re.sub(r"[ \t\r\f\v]+", " ", cell).strip()
-            cells.append(normalize_text(cell) if cell else "")
+            cells.append(normalize_markdown_latex_text(cell) if cell else "")
         if not cells:
             continue
         nonempty = [cell for cell in cells if cell]
@@ -1679,7 +1793,7 @@ def extract_html_table_rows(text):
 
 
 def extract_plain_table_rows(text):
-    text = normalize_markdown_text(text)
+    text = normalize_markdown_latex_text(text)
     rows = []
     for line in re.split(r"\n+", text):
         line = line.strip()
@@ -1690,7 +1804,7 @@ def extract_plain_table_rows(text):
             continue
         if cells is None:
             cells = [line]
-        cells = [normalize_text(cell) for cell in cells]
+        cells = [normalize_markdown_latex_text(cell) for cell in cells]
         nonempty = [cell for cell in cells if cell]
         if not nonempty:
             continue
@@ -1869,9 +1983,14 @@ _COMPONENT_EXPORTS = (
     "strip_paired_latex_dollar_delimiters",
     "contains_latex_fallback_command",
     "normalize_safe_latex_markup",
+    "MARKDOWN_LATEX_SPAN_RE",
+    "MARKDOWN_LATEX_PLACEHOLDER_START",
+    "MARKDOWN_LATEX_PLACEHOLDER_END",
+    "normalize_markdown_latex_text",
     "clean_latex_source",
     "linearize_latex_formula",
     "formula_source_text",
+    "markdown_formula_block_text",
     "fully_delimited_math_body",
     "formula_body_has_substantive_math",
     "is_formula_render_block",

@@ -21,7 +21,8 @@ never be staged.
    retry narrowly before selecting a safe fallback.
 6. Rebuild page-aligned PDFs with ReportLab.
 7. Keep unusable fallback pages blank in the text-only PDF and render the source
-   page only in the optional image variant.
+   page only in the optional image variant; preserve valid OCR Picture bboxes as
+   source-page crops in that variant.
 8. Overlay the original scans with an invisible OCR text layer to build the
    always-produced searchable variant.
 9. Validate page count, images, blank fallback pages, text residues, searchable

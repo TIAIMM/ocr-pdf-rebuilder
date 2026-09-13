@@ -99,6 +99,8 @@ engine invocation, so that chunk starts again on the next run.
 - text-only PDFs contain no raster images;
 - every fallback page is blank in text-only output and imaged in the image
   variant;
+- every valid OCR Picture bbox is preserved as a source crop in the image
+  variant, while the text-only PDF remains raster-free;
 - the searchable variant renders pixel-identically to the source, extracts OCR
   text on every page that produced overlay text, and carries no text for blank,
   table, formula or picture content;

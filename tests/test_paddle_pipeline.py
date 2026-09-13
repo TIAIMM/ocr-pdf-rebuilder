@@ -326,6 +326,82 @@ class PaddlePipelineTests(unittest.TestCase):
             self.assertIn("        Validate text PDF page 1/2", messages)
             self.assertIn("        Validate text PDF page 2/2", messages)
 
+    def test_picture_crop_is_preserved_only_in_image_variant(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source-picture.pdf"
+            with fitz.open() as document:
+                page = document.new_page(width=300, height=400)
+                page.insert_text((40, 55), "Visible heading", fontsize=12)
+                page.draw_rect(
+                    fitz.Rect(60, 100, 240, 280),
+                    color=(0, 0, 0),
+                    fill=(0, 0, 0),
+                )
+                page.insert_text((40, 330), "Picture caption", fontsize=10)
+                document.save(source)
+
+            result = {
+                "cells": [
+                    {
+                        "bbox": [40, 30, 260, 65],
+                        "category": "Text",
+                        "text": "Visible heading",
+                        "__bbox_units": "pdf",
+                    },
+                    {
+                        "bbox": [60, 100, 240, 280],
+                        "category": "Picture",
+                        "text": "",
+                        "__bbox_units": "pdf",
+                    },
+                    {
+                        "bbox": [40, 300, 260, 345],
+                        "category": "Text",
+                        "text": "Picture caption",
+                        "__bbox_units": "pdf",
+                    },
+                ],
+                "fallback_text": "",
+                "filtered": False,
+                "needs_retry": False,
+                "image_size": None,
+                "md_nohf_text": "Visible heading\nPicture caption",
+            }
+            output_pdf = root / "output.pdf"
+            output_images = root / "output_with_images.pdf"
+            with mock.patch.object(paddle_pipeline, "write_paddle_qc_report"):
+                fallback_pages = paddle_pipeline.build_outputs(
+                    source,
+                    {0: result},
+                    root / "work",
+                    root / "raw",
+                    output_pdf,
+                    output_images,
+                    root / "output.md",
+                )
+
+            self.assertEqual(fallback_pages, [])
+            self.assertEqual(
+                paddle_pipeline.shared.image_variant_page_indexes_from_results({0: result}),
+                [0],
+            )
+            with fitz.open(output_pdf) as text_document:
+                self.assertEqual(text_document.page_count, 1)
+                self.assertIn("Visible heading", text_document[0].get_text())
+                self.assertFalse(text_document[0].get_images(full=True))
+            with fitz.open(output_images) as image_document:
+                self.assertEqual(image_document.page_count, 1)
+                self.assertTrue(image_document[0].get_images(full=True))
+                picture = image_document[0].get_pixmap(
+                    matrix=fitz.Matrix(1, 1),
+                    clip=fitz.Rect(60, 100, 240, 280),
+                    colorspace=fitz.csGRAY,
+                    alpha=False,
+                )
+                self.assertLess(min(picture.samples), 30)
+                self.assertIn("Picture caption", image_document[0].get_text())
+
     def test_unsupported_glyphs_never_emit_null_and_wave_function_psi_is_repaired(self):
         self.assertEqual(
             paddle_pipeline.shared.normalize_draw_segment_text("⚲函数本身不能直接解释"),

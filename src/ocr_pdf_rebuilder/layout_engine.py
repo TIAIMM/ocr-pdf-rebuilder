@@ -9,14 +9,21 @@ import fitz
 from .component_runtime import ComponentRuntime
 from .pipeline_config import *
 
-def cell_to_block(cell, order, page_width, page_height, image_size):
+def cell_to_block(
+    cell,
+    order,
+    page_width,
+    page_height,
+    image_size,
+    allow_empty_picture=False,
+):
     bbox = cell.get("bbox")
     text = get_text_from_cell(cell)
     category = normalize_category(cell.get("category"))
 
-    if category == "Picture" and not text:
+    if category == "Picture" and not text and not allow_empty_picture:
         return None
-    if not text and category not in {"Formula", "Table"}:
+    if not text and category not in {"Formula", "Picture", "Table"}:
         return None
     if not isinstance(bbox, list) or len(bbox) != 4:
         return None
@@ -112,6 +119,70 @@ def blocks_from_page_result(result, page_width, page_height):
         if block:
             blocks.append(block)
     return blocks
+
+
+def empty_picture_blocks_from_page_result(result, page_width, page_height):
+    """Return image-only Picture cells without changing ordinary text layout.
+
+    Empty Picture cells have no text that the ReportLab reconstruction can
+    draw, but their image-space bbox is still a reliable source-page crop
+    request.  Keep these blocks separate from the normal text preparation
+    pass: they do not need font fitting, Markdown output or searchable text.
+    """
+
+    blocks = []
+    for order, cell in enumerate(result.get("cells", []) or []):
+        if normalize_category(cell.get("category")) != "Picture":
+            continue
+        if get_text_from_cell(cell):
+            continue
+        block = cell_to_block(
+            cell,
+            order,
+            page_width,
+            page_height,
+            result.get("image_size"),
+            allow_empty_picture=True,
+        )
+        if block:
+            block["picture_visual_only"] = True
+            blocks.append(block)
+    return blocks
+
+
+def image_variant_page_indexes(page_specs):
+    """Return pages containing either a full-page fallback or a Picture crop."""
+
+    return [
+        page_index
+        for page_index, (_page_width, _page_height, blocks) in enumerate(page_specs)
+        if any(block.get("category") in {"ImageFallback", "Picture"} for block in blocks)
+    ]
+
+
+def image_variant_page_indexes_from_results(page_results):
+    """Return image-variant pages represented by raw page results."""
+
+    def has_valid_picture_bbox(cell):
+        bbox = cell.get("bbox")
+        if not isinstance(bbox, list) or len(bbox) != 4:
+            return False
+        try:
+            x0, y0, x1, y1 = (float(value) for value in bbox)
+        except (TypeError, ValueError):
+            return False
+        return all(math.isfinite(value) for value in (x0, y0, x1, y1)) and x1 > x0 and y1 > y0
+
+    return sorted(
+        int(page_index)
+        for page_index, result in (page_results or {}).items()
+        if result.get("image_fallback_path")
+        or any(
+            normalize_category(cell.get("category")) == "Picture"
+            and has_valid_picture_bbox(cell)
+            for cell in (result.get("cells") or [])
+        )
+    )
 
 
 SOURCE_TEXT_ROTATION_MIN_HORIZONTAL_LINES = 3
@@ -2132,12 +2203,14 @@ def prepare_blocks(blocks, page_width, page_height):
 def table_block_to_markdown(block):
     rows = table_rows_for_block(block)
     if not rows:
-        return normalize_text(block["text"])
+        return normalize_markdown_latex_text(block["text"])
 
     if is_toc_table(rows):
         lines = []
         for row in rows:
             left_text, right_text = table_row_parts(row)
+            left_text = normalize_markdown_latex_text(left_text)
+            right_text = normalize_markdown_latex_text(right_text)
             if not left_text and not right_text:
                 continue
             indent = "  " * table_row_level(row, left_text)
@@ -2151,7 +2224,7 @@ def table_block_to_markdown(block):
     max_cols = 0
     for row in rows:
         cells = row.get("cells") or row.get("nonempty_cells") or []
-        cells = [normalize_text(cell) for cell in cells]
+        cells = [normalize_markdown_latex_text(cell) for cell in cells]
         if any(cells):
             normalized_rows.append(cells)
             max_cols = max(max_cols, len(cells))
@@ -2178,8 +2251,10 @@ def blocks_to_markdown_page(blocks, page_index):
         category = block["category"]
         if category == "Table":
             text = table_block_to_markdown(block)
+        elif category == "Formula":
+            text = markdown_formula_block_text(block)
         else:
-            text = normalize_text(block["text"])
+            text = normalize_markdown_latex_text(block["text"])
         if not text:
             continue
         if category == "Title":
@@ -2194,9 +2269,7 @@ def blocks_to_markdown_page(blocks, page_index):
             else:
                 lines.append(f"- {text}")
         elif category == "Formula":
-            lines.append("```")
             lines.append(text)
-            lines.append("```")
         else:
             lines.append(text)
         lines.append("")
@@ -2204,7 +2277,7 @@ def blocks_to_markdown_page(blocks, page_index):
 
 
 def markdown_page_from_result(result, blocks, page_index):
-    md_nohf_text = normalize_markdown_text(result.get("md_nohf_text", ""))
+    md_nohf_text = normalize_markdown_latex_text(result.get("md_nohf_text", ""))
     if md_nohf_text:
         return md_nohf_text
     return blocks_to_markdown_page(blocks, page_index)
@@ -2223,7 +2296,7 @@ def category_render_policy(category):
         "List-item": "list Markdown line; bullet/number formatting preserved",
         "Page-footer": "page footer rendered in PDF; excluded from generated Markdown fallback",
         "Page-header": "page header rendered in PDF; excluded from generated Markdown fallback",
-        "Picture": "ignored unless OCR supplies textual content",
+        "Picture": "source-page crop in image variant; skipped by text-only/searchable text layers",
         "Section-header": "section heading; centered/bold PDF; ## in generated Markdown fallback",
         "Table": "cell-aware table rendering; TOC vs plain table auto-detected from original cell data; structured Markdown fallback",
         "Text": "body text block; strict bbox rendering",
@@ -2248,6 +2321,9 @@ _COMPONENT_EXPORTS = (
     "fallback_text_block",
     "image_fallback_block",
     "blocks_from_page_result",
+    "empty_picture_blocks_from_page_result",
+    "image_variant_page_indexes",
+    "image_variant_page_indexes_from_results",
     "source_page_text_rotation_degrees",
     "rotate_blocks_for_source_orientation",
     "has_cjk",

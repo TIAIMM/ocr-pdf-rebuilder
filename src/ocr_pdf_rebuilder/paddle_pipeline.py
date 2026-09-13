@@ -70,7 +70,7 @@ PADDLE_DPI = shared.DPI
 PADDLE_PROCESS_TIMEOUT_SECONDS = 24 * 60 * 60
 PADDLE_PROCESS_IDLE_TIMEOUT_SECONDS = 30 * 60
 PADDLE_PROCESS_TERMINATE_GRACE_SECONDS = 20
-OUTPUT_VERSION = "paddleocr-vl-1.6-reportlab-searchable-v12-wps-selectable-underlay"
+OUTPUT_VERSION = "paddleocr-vl-1.6-reportlab-searchable-v13-picture-crops"
 CHECKPOINT_SCHEMA = 1
 SKIP_EXISTING = True
 
@@ -289,6 +289,18 @@ def completion_matches(
             return False
         if path.suffix.lower() == ".pdf" and signature.get("page_count") != page_count:
             return False
+    variant_pages = state.get("image_variant_pages", state.get("image_fallback_pages", []))
+    if not isinstance(variant_pages, list) or any(
+        not isinstance(page_number, int)
+        or page_number < 1
+        or page_number > page_count
+        for page_number in variant_pages
+    ):
+        return False
+    if variant_pages != sorted(set(variant_pages)):
+        return False
+    if bool(variant_pages) != bool(state.get("has_image_variant")):
+        return False
     return True
 
 
@@ -300,7 +312,13 @@ def write_completion_state(
     output_image_pdf: Path,
     image_fallback_pages: list[int],
     output_searchable_pdf: Path | None = None,
+    image_variant_pages: list[int] | None = None,
 ) -> None:
+    image_fallback_pages = sorted(set(int(page) for page in image_fallback_pages))
+    image_variant_pages = sorted(
+        set(image_fallback_pages)
+        | set(int(page) for page in (image_variant_pages or []))
+    )
     paddle_runtime_identity.cache_clear()
     identity = paddle_runtime_identity()
     payload = {
@@ -320,11 +338,12 @@ def write_completion_state(
         ),
         "output_image_pdf": (
             shared.pdf_artifact_signature(output_image_pdf)
-            if image_fallback_pages
+            if image_variant_pages
             else None
         ),
-        "has_image_variant": bool(image_fallback_pages),
+        "has_image_variant": bool(image_variant_pages),
         "image_fallback_pages": [page_index + 1 for page_index in image_fallback_pages],
+        "image_variant_pages": [page_index + 1 for page_index in image_variant_pages],
         "completed_at": time.time(),
     }
     shared.write_checkpoint(state_path, payload)
@@ -692,7 +711,13 @@ def write_paddle_qc_report(
     image_fallback_pages: list[int],
     validation_scan: dict[str, object],
     output_searchable_pdf: Path | None = None,
+    image_variant_pages: list[int] | None = None,
 ) -> dict[str, object]:
+    image_fallback_pages = sorted(set(int(page) for page in image_fallback_pages))
+    image_variant_pages = sorted(
+        set(image_fallback_pages)
+        | set(int(page) for page in (image_variant_pages or []))
+    )
     suspects = shared.collect_qc_suspect_pages(
         pdf_path, page_results, page_specs, len(page_specs)
     )
@@ -707,6 +732,7 @@ def write_paddle_qc_report(
         "source_page_count": len(page_specs),
         "output_page_count": validation_scan.get("page_count"),
         "image_fallback_pages": [page + 1 for page in image_fallback_pages],
+        "image_variant_pages": [page + 1 for page in image_variant_pages],
         "suspect_pages": suspects,
         "page_results": {
             str(page + 1): {
@@ -981,11 +1007,35 @@ def build_outputs(
                         "overlapping alternate OCR readings; used a rotated source "
                         "page image fallback"
                     )
+                if not any(block.get("category") == "ImageFallback" for block in blocks):
+                    picture_blocks = shared.empty_picture_blocks_from_page_result(
+                        result, page_width, page_height
+                    )
+                    if source_rotation:
+                        picture_blocks = shared.rotate_blocks_for_source_orientation(
+                            picture_blocks,
+                            page_width,
+                            page_height,
+                            source_rotation,
+                        )
+                    blocks.extend(picture_blocks)
+                    blocks.sort(
+                        key=lambda block: (
+                            shared.is_header_footer(block),
+                            block["top"],
+                            block["left"],
+                            block["order"],
+                        )
+                    )
             for block in blocks:
                 block["page_index"] = page_index
                 block["source_pdf_path"] = str(pdf_path)
                 block["formula_cache_dir"] = str(work_dir / "formula_render_cache")
                 block["formula_crop_dir"] = str(work_dir / "formula_image_crops")
+                if block.get("category") == "Picture":
+                    block["picture_crop_dir"] = str(work_dir / "picture_image_crops")
+                    block["picture_crop_dpi"] = shared.PICTURE_CROP_RENDER_DPI
+                    block["picture_crop_padding"] = shared.PICTURE_CROP_PADDING
                 category = block["category"]
                 category_counts[category] = category_counts.get(category, 0) + 1
             if any(block.get("category") == "ImageFallback" for block in blocks):
@@ -1020,9 +1070,11 @@ def build_outputs(
     shared.validate_pdf_has_no_raster_images(output_pdf, validation)
     shared.validate_pdf_pages_are_blank(output_pdf, image_fallback_pages, validation)
 
-    if image_fallback_pages:
+    image_variant_pages = shared.image_variant_page_indexes(page_specs)
+    if image_variant_pages:
         log(
-            f"    Rendering image-variant PDF for {len(image_fallback_pages)} fallback page(s): "
+            f"    Rendering image-variant PDF for {len(image_variant_pages)} page(s) "
+            f"({len(image_fallback_pages)} full-page fallback): "
             f"{output_image_pdf}"
         )
         image_specs = [
@@ -1047,7 +1099,7 @@ def build_outputs(
         )
         shared.validate_pdf_page_count(output_image_pdf, page_count, image_validation)
         shared.validate_pdf_has_images_on_pages(
-            output_image_pdf, image_fallback_pages, image_validation
+            output_image_pdf, image_variant_pages, image_validation
         )
         shared.validate_pdf_has_no_radicals(output_image_pdf, image_validation)
         shared.validate_pdf_has_no_control_chars(output_image_pdf, image_validation)
@@ -1065,10 +1117,11 @@ def build_outputs(
         page_results,
         page_specs,
         output_pdf,
-        output_image_pdf if image_fallback_pages else None,
+        output_image_pdf if image_variant_pages else None,
         image_fallback_pages,
         validation,
         output_searchable_pdf=output_searchable_pdf,
+        image_variant_pages=image_variant_pages,
     )
     shared.validate_pdf_has_no_radicals(output_pdf, validation)
     shared.validate_pdf_has_no_control_chars(output_pdf, validation)
@@ -1099,6 +1152,7 @@ def process_pdf(pdf_path: Path, index: int, total: int) -> dict[str, object]:
             "output_text_pdf": str(output_pdf),
             "output_searchable_pdf": str(output_searchable_pdf),
             "output_image_pdf": str(output_image_pdf) if state.get("has_image_variant") else None,
+            "image_variant_pages": state.get("image_variant_pages", []),
         }
 
     work_dir = TMP_DIR / name
@@ -1149,6 +1203,7 @@ def process_pdf(pdf_path: Path, index: int, total: int) -> dict[str, object]:
         output_md,
         output_searchable_pdf,
     )
+    image_variant_pages = shared.image_variant_page_indexes_from_results(page_results)
     write_completion_state(
         output_version,
         pdf_path,
@@ -1157,6 +1212,7 @@ def process_pdf(pdf_path: Path, index: int, total: int) -> dict[str, object]:
         output_image_pdf,
         image_fallback_pages,
         output_searchable_pdf,
+        image_variant_pages=image_variant_pages,
     )
     log("    [5/5] Done")
     log(
@@ -1168,8 +1224,9 @@ def process_pdf(pdf_path: Path, index: int, total: int) -> dict[str, object]:
         "status": "completed",
         "output_text_pdf": str(output_pdf),
         "output_searchable_pdf": str(output_searchable_pdf),
-        "output_image_pdf": str(output_image_pdf) if image_fallback_pages else None,
+        "output_image_pdf": str(output_image_pdf) if image_variant_pages else None,
         "image_fallback_pages": [page + 1 for page in image_fallback_pages],
+        "image_variant_pages": [page + 1 for page in image_variant_pages],
     }
 
 

@@ -252,11 +252,29 @@ def process_pdf(pdf_path, index, total):
                     f"because {first_failure.get('category')} block order={first_failure.get('order')} "
                     "was still outside its safe bbox limits"
                 )
+            if not any(block.get("category") == "ImageFallback" for block in blocks):
+                blocks.extend(
+                    empty_picture_blocks_from_page_result(
+                        result, page_width, page_height
+                    )
+                )
+                blocks.sort(
+                    key=lambda block: (
+                        is_header_footer(block),
+                        block["top"],
+                        block["left"],
+                        block["order"],
+                    )
+                )
         for block in blocks:
             block["page_index"] = page_index
             block["source_pdf_path"] = str(pdf_path)
             block["formula_cache_dir"] = str(work_dir / "formula_render_cache")
             block["formula_crop_dir"] = str(work_dir / "formula_image_crops")
+            if block.get("category") == "Picture":
+                block["picture_crop_dir"] = str(work_dir / "picture_image_crops")
+                block["picture_crop_dpi"] = PICTURE_CROP_RENDER_DPI
+                block["picture_crop_padding"] = PICTURE_CROP_PADDING
             category_counts[block["category"]] = category_counts.get(block["category"], 0) + 1
         if any(block.get("category") == "ImageFallback" for block in blocks):
             image_fallback_pages.append(page_index)
@@ -294,9 +312,11 @@ def process_pdf(pdf_path, index, total):
     validate_pdf_pages_are_blank(output_pdf, image_fallback_pages, output_validation_scan)
 
     output_image_validation_scan = None
-    if image_fallback_pages:
+    image_variant_pages = image_variant_page_indexes(page_specs)
+    if image_variant_pages:
         log(
-            f"    Rendering image-variant PDF for {len(image_fallback_pages)} fallback page(s): "
+            f"    Rendering image-variant PDF for {len(image_variant_pages)} page(s) "
+            f"({len(image_fallback_pages)} full-page fallback): "
             f"{output_image_pdf}"
         )
         # Rendering records formula fallback modes on blocks for QC. Keep the
@@ -325,7 +345,7 @@ def process_pdf(pdf_path, index, total):
         validate_pdf_page_count(output_image_pdf, page_count, output_image_validation_scan)
         validate_pdf_has_images_on_pages(
             output_image_pdf,
-            image_fallback_pages,
+            image_variant_pages,
             output_image_validation_scan,
         )
         validate_pdf_has_no_radicals(output_image_pdf, output_image_validation_scan)
@@ -333,7 +353,7 @@ def process_pdf(pdf_path, index, total):
         validate_pdf_has_no_latex_residue(output_image_pdf, output_image_validation_scan)
     elif output_image_pdf.exists():
         output_image_pdf.unlink()
-        log(f"    Removed stale image variant because this run has no fallback pages: {output_image_pdf}")
+        log(f"    Removed stale image variant because this run has no visual blocks: {output_image_pdf}")
 
     searchable_stats = build_validated_searchable_pdf(
         pdf_path,
@@ -347,9 +367,10 @@ def process_pdf(pdf_path, index, total):
         page_results,
         page_specs,
         output_pdf,
-        output_image_pdf=output_image_pdf if image_fallback_pages else None,
+        output_image_pdf=output_image_pdf if image_variant_pages else None,
         output_searchable_pdf=output_searchable_pdf,
         image_fallback_pages=image_fallback_pages,
+        image_variant_pages=image_variant_pages,
         parser_runs=parser_runs,
         output_validation_scan=output_validation_scan,
     )
@@ -361,11 +382,11 @@ def process_pdf(pdf_path, index, total):
     log("    [5/5] Done")
     size_mb = output_pdf.stat().st_size / 1024 / 1024
     log(f"    Saved: {output_pdf} ({size_mb:.2f} MB), blocks={total_blocks}, time={format_seconds(time.monotonic() - start)}")
-    if image_fallback_pages:
+    if image_variant_pages:
         image_size_mb = output_image_pdf.stat().st_size / 1024 / 1024
         log(
             f"    Saved image variant: {output_image_pdf} ({image_size_mb:.2f} MB), "
-            f"fallback_pages={len(image_fallback_pages)}"
+            f"visual_pages={len(image_variant_pages)}, fallback_pages={len(image_fallback_pages)}"
         )
     searchable_size_mb = output_searchable_pdf.stat().st_size / 1024 / 1024
     log(
@@ -381,6 +402,7 @@ def process_pdf(pdf_path, index, total):
         output_image_pdf,
         output_searchable_pdf,
         image_fallback_pages,
+        image_variant_pages,
     )
 
     if DELETE_INTERMEDIATE_ON_SUCCESS:
@@ -391,9 +413,10 @@ def process_pdf(pdf_path, index, total):
     return {
         "status": "completed",
         "output_text_pdf": str(output_pdf),
-        "output_image_pdf": str(output_image_pdf) if image_fallback_pages else None,
+        "output_image_pdf": str(output_image_pdf) if image_variant_pages else None,
         "output_searchable_pdf": str(output_searchable_pdf),
         "image_fallback_pages": [page_index + 1 for page_index in image_fallback_pages],
+        "image_variant_pages": [page_index + 1 for page_index in image_variant_pages],
     }
 
 

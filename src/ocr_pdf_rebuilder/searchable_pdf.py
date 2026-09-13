@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -10,12 +11,15 @@ import fitz
 from .component_runtime import ComponentRuntime
 from .pipeline_config import *
 
-SEARCHABLE_SKIP_CATEGORIES = frozenset({"Table", "Formula", "Picture"})
+SEARCHABLE_SKIP_CATEGORIES = frozenset({"Table", "Picture"})
 SEARCHABLE_MIN_RECT_POINTS = 1.0
 SEARCHABLE_MIN_FONT_SIZE = 0.1
 SEARCHABLE_VISUAL_SAMPLE_LIMIT = 12
 SEARCHABLE_VISUAL_VALIDATION_DPI = 72
 SEARCHABLE_TEXT_RENDER_MODE = 0
+SEARCHABLE_SIMPLE_FRACTION_RE = re.compile(
+    r"\(([A-Za-z0-9Α-ωΑ-Ω]+)\)/\(([A-Za-z0-9Α-ωΑ-Ω]+)\)"
+)
 
 
 def _searchable_rect_from_bbox(bbox, scale_x, scale_y):
@@ -56,7 +60,7 @@ def _searchable_fit_size(font, text, rect):
 
 
 def _searchable_place_text(writer, rect, text, fonts):
-    text = (text or "").strip()
+    text = _searchable_normalize_text(text).strip()
     if not text:
         return False
     font = fonts["cjk"] if has_cjk(text) else fonts["latin"]
@@ -68,6 +72,31 @@ def _searchable_place_text(writer, rect, text, fonts):
     return True
 
 
+def _searchable_normalize_text(text):
+    """Return searchable text without raw Markdown/LaTeX residue."""
+    normalized = normalize_markdown_text(text or "")
+    if LATEX_RESIDUE_RE.search(normalized) or contains_latex_fallback_command(normalized):
+        normalized = normalize_markdown_text(linearize_latex_formula(normalized))
+    return normalized
+
+
+def _searchable_text_for_block(block):
+    """Return the plain, searchable representation of one layout block."""
+    category = str(block.get("category") or "Text")
+    if category == "Formula":
+        # Search indexes should contain a stable textual form rather than raw
+        # TeX commands.  The visible formula remains in the source/image PDF;
+        # this text is only the selectable/searchable companion layer.
+        text = linearize_latex_formula(formula_source_text(block))
+        # Keep simple fractions easy to find and copy.  Parentheses remain for
+        # compound numerators/denominators where they carry grouping meaning.
+        text = SEARCHABLE_SIMPLE_FRACTION_RE.sub(r"\1/\2", text)
+    else:
+        text = _searchable_normalize_text(block.get("text", ""))
+    lines = [" ".join(line.split()) for line in str(text or "").splitlines()]
+    return "\n".join(line for line in lines if line).strip()
+
+
 def _searchable_block_fallback_rects(block):
     rect = fitz.Rect(
         block["left"],
@@ -75,7 +104,8 @@ def _searchable_block_fallback_rects(block):
         block["left"] + block["width"],
         block["top"] + block["height"],
     )
-    lines = [line for line in str(block.get("text") or "").split("\n") if line.strip()]
+    text = _searchable_text_for_block(block)
+    lines = [line for line in text.split("\n") if line.strip()]
     if not lines:
         return []
     if len(lines) == 1:
@@ -91,6 +121,12 @@ def _searchable_block_fallback_rects(block):
 
 
 def _searchable_block_placements(block, page_rect):
+    if str(block.get("category") or "Text") == "Formula":
+        # Formula cells rarely carry trustworthy line/span boxes.  Use their
+        # complete source bbox and the linearized search string so every
+        # rendered formula remains findable without leaking TeX markup.
+        return _searchable_block_fallback_rects(block)
+
     scale_x = block.get("bbox_scale_x", 1.0)
     scale_y = block.get("bbox_scale_y", 1.0)
     placements = []
@@ -334,6 +370,7 @@ _COMPONENT_EXPORTS = (
     "SEARCHABLE_VISUAL_SAMPLE_LIMIT",
     "SEARCHABLE_VISUAL_VALIDATION_DPI",
     "SEARCHABLE_TEXT_RENDER_MODE",
+    "SEARCHABLE_SIMPLE_FRACTION_RE",
     "build_searchable_pdf",
     "build_validated_searchable_pdf",
     "searchable_visual_sample_indexes",

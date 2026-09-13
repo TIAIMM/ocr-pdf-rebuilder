@@ -1389,6 +1389,74 @@ def reportlab_page_fit_failures(page_height, blocks):
     return failures
 
 
+def picture_crop_path(block):
+    crop_dir = block.get("picture_crop_dir")
+    page_index = block.get("page_index")
+    if crop_dir is None or page_index is None:
+        return None
+    try:
+        page_number = int(page_index) + 1
+        order = int(block.get("order", 0))
+    except (TypeError, ValueError):
+        return None
+    return Path(crop_dir) / f"page_{page_number:04d}_picture_{order}.png"
+
+
+def render_picture_crop(rect, block):
+    """Render a source-page Picture bbox for the image-inclusive variant."""
+
+    crop_path = picture_crop_path(block)
+    source_pdf = block.get("source_pdf_path")
+    page_index = block.get("page_index")
+    if crop_path is None or source_pdf is None or page_index is None:
+        raise RuntimeError(
+            "Picture block has no source crop metadata: "
+            f"page={page_index}, order={block.get('order')}"
+        )
+    crop_path.parent.mkdir(parents=True, exist_ok=True)
+    if crop_path.is_file() and crop_path.stat().st_size > 0:
+        return crop_path
+
+    rotation = int(block.get("source_orientation_correction_degrees") or 0) % 360
+    if rotation not in {0, 180}:
+        rotation = 0
+    with fitz.open(source_pdf) as document:
+        page_index = int(page_index)
+        if page_index < 0 or page_index >= document.page_count:
+            raise RuntimeError(f"Picture source page index out of range: {page_index}")
+        page = document[page_index]
+        source_rect = fitz.Rect(rect)
+        if rotation == 180:
+            source_rect = fitz.Rect(
+                page.rect.width - rect.x1,
+                page.rect.height - rect.y1,
+                page.rect.width - rect.x0,
+                page.rect.height - rect.y0,
+            )
+        padding = max(0.0, float(block.get("picture_crop_padding", PICTURE_CROP_PADDING)))
+        source_rect.x0 = max(page.rect.x0, source_rect.x0 - padding)
+        source_rect.y0 = max(page.rect.y0, source_rect.y0 - padding)
+        source_rect.x1 = min(page.rect.x1, source_rect.x1 + padding)
+        source_rect.y1 = min(page.rect.y1, source_rect.y1 + padding)
+        if source_rect.is_empty or source_rect.width <= 0 or source_rect.height <= 0:
+            raise RuntimeError(
+                "Picture source crop is empty: "
+                f"page={page_index + 1}, order={block.get('order')}"
+            )
+        dpi = max(72.0, float(block.get("picture_crop_dpi", PICTURE_CROP_RENDER_DPI)))
+        matrix = fitz.Matrix(dpi / 72.0, dpi / 72.0)
+        if rotation:
+            matrix = matrix.prerotate(rotation)
+        pixmap = page.get_pixmap(matrix=matrix, clip=source_rect, alpha=False)
+        if pixmap.width <= 0 or pixmap.height <= 0:
+            raise RuntimeError(
+                "Picture source crop rendered empty: "
+                f"page={page_index + 1}, order={block.get('order')}"
+            )
+        pixmap.save(str(crop_path))
+    return crop_path
+
+
 def render_blocks_to_pdf_reportlab(
     page_specs,
     output_pdf,
@@ -1413,7 +1481,19 @@ def render_blocks_to_pdf_reportlab(
     c = canvas.Canvas(str(output_pdf), pagesize=(page_specs[0][0], page_specs[0][1]))
     for page_no, (page_width, page_height, blocks) in enumerate(page_specs):
         c.setPageSize((page_width, page_height))
-        for block in blocks:
+        render_blocks = [
+            *[
+                block
+                for block in blocks
+                if block.get("category") in {"ImageFallback", "Picture"}
+            ],
+            *[
+                block
+                for block in blocks
+                if block.get("category") not in {"ImageFallback", "Picture"}
+            ],
+        ]
+        for block in render_blocks:
             if block.get("category") == "ImageFallback":
                 if include_full_page_images:
                     image_path = block.get("image_path")
@@ -1438,6 +1518,21 @@ def render_blocks_to_pdf_reportlab(
             )
             if rect.is_empty or rect.width <= 0 or rect.height <= 0:
                 continue
+
+            if block.get("category") == "Picture":
+                if include_full_page_images:
+                    image_path = render_picture_crop(rect, block)
+                    c.drawImage(
+                        str(image_path),
+                        rect.x0,
+                        page_height - rect.y1,
+                        width=rect.width,
+                        height=rect.height,
+                        preserveAspectRatio=False,
+                        mask="auto",
+                    )
+                if not str(block.get("text") or "").strip():
+                    continue
 
             if is_formula_render_block(block):
                 if render_formula_block(
@@ -1630,6 +1725,8 @@ _COMPONENT_EXPORTS = (
     "reportlab_table_fits",
     "reportlab_block_fit_failure",
     "reportlab_page_fit_failures",
+    "picture_crop_path",
+    "render_picture_crop",
     "render_blocks_to_pdf_reportlab",
     "LATIN_LIKE_RE",
     "GREEK_LIKE_RE",

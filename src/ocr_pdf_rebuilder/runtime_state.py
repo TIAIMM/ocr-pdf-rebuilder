@@ -426,7 +426,17 @@ def completed_output_state_matches(
         return False
     if fallback_pages != sorted(set(fallback_pages)):
         return False
-    if has_image_variant != bool(fallback_pages):
+    variant_pages = state.get("image_variant_pages", fallback_pages)
+    if not isinstance(variant_pages, list) or any(
+        not isinstance(page_number, int)
+        or page_number < 1
+        or page_number > expected_page_count
+        for page_number in variant_pages
+    ):
+        return False
+    if variant_pages != sorted(set(variant_pages)):
+        return False
+    if has_image_variant != bool(variant_pages):
         return False
     if has_image_variant:
         try:
@@ -437,7 +447,7 @@ def completed_output_state_matches(
             return False
         if image_signature.get("page_count") != expected_page_count:
             return False
-    elif state.get("image_pdf") is not None or fallback_pages:
+    elif state.get("image_pdf") is not None or variant_pages:
         return False
     return True
 
@@ -450,11 +460,17 @@ def write_completed_output_state(
     image_pdf_path,
     searchable_pdf_path,
     image_fallback_pages,
+    image_variant_pages=None,
 ):
+    image_fallback_pages = sorted(set(int(page) for page in image_fallback_pages))
+    image_variant_pages = sorted(
+        set(image_fallback_pages)
+        | set(int(page) for page in (image_variant_pages or []))
+    )
     text_signature = pdf_artifact_signature(text_pdf_path)
     markdown_signature = file_integrity_signature(markdown_path)
     image_signature = (
-        pdf_artifact_signature(image_pdf_path) if image_fallback_pages else None
+        pdf_artifact_signature(image_pdf_path) if image_variant_pages else None
     )
     searchable_signature = pdf_artifact_signature(searchable_pdf_path)
     write_checkpoint(
@@ -471,8 +487,9 @@ def write_completed_output_state(
             "markdown": markdown_signature,
             "image_pdf": image_signature,
             "searchable_pdf": searchable_signature,
-            "has_image_variant": bool(image_fallback_pages),
+            "has_image_variant": bool(image_variant_pages),
             "image_fallback_pages": [int(page_index) + 1 for page_index in image_fallback_pages],
+            "image_variant_pages": [int(page_index) + 1 for page_index in image_variant_pages],
             "updated_at": time.time(),
         },
     )

@@ -16,6 +16,25 @@ from ocr_pdf_rebuilder import pipeline_runtime as pipeline
 
 
 class LatexHardeningTests(unittest.TestCase):
+    def test_markdown_preserves_inline_and_display_latex(self):
+        source = r"正文 $x_{i}=\frac{1}{2}$ 继续。\n\n$$W\_G\_W$$"
+        markdown = pipeline.normalize_markdown_latex_text(source)
+
+        self.assertIn(r"$x_{i}=\frac{1}{2}$", markdown)
+        self.assertIn(r"$$W\_G\_W$$", markdown)
+        self.assertIn("正文", markdown)
+        self.assertIn("继续", markdown)
+
+    def test_formula_block_markdown_uses_display_math(self):
+        block = {
+            "category": "Formula",
+            "text": r"W\_G\_W = WG.G^{2}",
+            "source_text": r"W\_G\_W = WG.G^{2}",
+        }
+        markdown = pipeline.blocks_to_markdown_page([block], 0)
+
+        self.assertEqual(markdown, "$$\nW\\_G\\_W = WG.G^{2}\n$$")
+
     def test_nested_scripts_and_editorial_star_marker_are_normalized(self):
         source = r"$ ^{{**}} $ Zum] $ D^{{3}} $ Zum"
         normalized = pipeline.normalize_text(source)
@@ -95,6 +114,27 @@ class LatexHardeningTests(unittest.TestCase):
                 self.assertIsNotNone(pipeline.LATEX_RESIDUE_RE.search(residue))
 
         self.assertIsNone(pipeline.LATEX_RESIDUE_RE.search("ordinary set {x, y}"))
+
+    def test_escaped_latex_punctuation_is_linearized_for_pdf_text(self):
+        for source, expected in (
+            (r"W\_G\_W", "W_G_W"),
+            (r"G\\W\\P\\W'\\G'", "G W P W' G'"),
+            (r"\{x\} + \$1", "{x} + $1"),
+            (r"\|5\|", "|5|"),
+        ):
+            with self.subTest(source=source):
+                normalized = pipeline.normalize_text(source)
+                self.assertEqual(normalized, expected)
+                self.assertIsNone(pipeline.LATEX_RESIDUE_RE.search(normalized))
+
+    def test_malformed_formula_delimiters_are_linearized_for_pdf_text(self):
+        source = r"Die Bewegung $ W' $ _ $ G' $."
+        normalized = pipeline.normalize_text(source)
+
+        self.assertIn("Die Bewegung W'", normalized)
+        self.assertIn("G'", normalized)
+        self.assertNotIn("$", normalized)
+        self.assertIsNone(pipeline.LATEX_RESIDUE_RE.search(normalized))
 
     def test_cached_table_rows_are_normalized_at_the_draw_boundary(self):
         raw_cell = r"$ ^{{**}} $ Zum] $ D^{{3}} $ Zum"

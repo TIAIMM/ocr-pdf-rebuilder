@@ -10,6 +10,7 @@ import fitz
 
 from .component_runtime import ComponentRuntime
 from .pipeline_config import *
+from .reading_order import order_items_for_reading
 
 SEARCHABLE_SKIP_CATEGORIES = frozenset({"Table", "Picture"})
 SEARCHABLE_MIN_RECT_POINTS = 1.0
@@ -172,7 +173,7 @@ def _searchable_block_placements(block, page_rect):
 
 def _searchable_page_placements(page, result):
     page_rect = page.rect
-    placements = []
+    blocks = []
     skipped = 0
     for order, cell in enumerate(result.get("cells") or []):
         block = cell_to_block(
@@ -184,6 +185,12 @@ def _searchable_page_placements(page, result):
         )
         if block is None:
             continue
+        blocks.append(block)
+
+    placements = []
+    for block in order_items_for_reading(
+        blocks, page_rect.width, page_rect.height
+    ):
         if block["category"] in SEARCHABLE_SKIP_CATEGORIES:
             skipped += 1
             continue

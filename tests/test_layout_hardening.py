@@ -64,7 +64,8 @@ class LayoutHardeningTests(unittest.TestCase):
         self.assertTrue(updated[0]["source_facsimile_detected"])
         self.assertEqual(updated[0]["image_fallback_kind"], "source_facsimile")
         self.assertEqual(updated[0]["source_facsimile_large_raster_count"], 2)
-        self.assertEqual(updated[0]["cells"], [])
+        self.assertEqual(len(updated[0]["cells"]), 1)
+        self.assertTrue(updated[0]["visual_fallback_text_preserved"])
         self.assertTrue(Path(updated[0]["image_fallback_path"]).is_file())
         self.assertNotIn("image_fallback_path", updated[1])
 
@@ -102,6 +103,83 @@ class LayoutHardeningTests(unittest.TestCase):
         self.assertEqual(updated[0]["source_facsimile_large_raster_count"], 1)
         self.assertEqual(updated[0]["source_auxiliary_color_raster_count"], 1)
         self.assertTrue(updated[0]["image_fallback_page"])
+
+    def test_auxiliary_color_picture_crop_does_not_force_full_page_fallback(self):
+        source = self.root / "covered-color-logo.pdf"
+        with fitz.open() as document:
+            page = document.new_page(width=300, height=400)
+            page.insert_image(
+                page.rect,
+                stream=png_payload((1200, 1600), "white"),
+            )
+            page.insert_image(
+                fitz.Rect(115, 35, 185, 105),
+                stream=png_payload((70, 70), "red"),
+            )
+            document.save(source)
+
+        result = {
+            "cells": [
+                {
+                    "category": "Text",
+                    "text": "Publisher title",
+                    "bbox": [40, 130, 260, 180],
+                    "__bbox_units": "pdf",
+                },
+                {
+                    "category": "Picture",
+                    "text": "",
+                    "bbox": [110, 30, 190, 110],
+                    "__bbox_units": "pdf",
+                },
+            ]
+        }
+        updated = self.pipeline.degrade_source_facsimile_pages_to_images(
+            source,
+            {0: result},
+            self.root / "work",
+        )
+
+        self.assertNotIn("image_fallback_path", updated[0])
+        self.assertEqual(updated[0]["source_auxiliary_color_raster_candidate_count"], 1)
+        self.assertEqual(updated[0]["source_auxiliary_color_raster_covered_count"], 1)
+        self.assertEqual(updated[0]["source_auxiliary_color_raster_unrepresented_count"], 0)
+
+    def test_vector_page_with_local_color_diagrams_is_not_a_facsimile(self):
+        source = self.root / "vector-diagrams.pdf"
+        with fitz.open() as document:
+            page = document.new_page(width=300, height=400)
+            page.insert_text((35, 45), "Vector-outline page with local diagrams")
+            page.insert_image(
+                fitz.Rect(40, 100, 240, 260),
+                stream=png_payload((400, 320), "blue"),
+            )
+            page.insert_image(
+                fitz.Rect(45, 300, 95, 340),
+                stream=png_payload((100, 80), "red"),
+            )
+            document.save(source)
+
+        result = {
+            "cells": [
+                {
+                    "category": "Text",
+                    "text": "Vector-outline page with local diagrams",
+                    "bbox": [30, 25, 270, 60],
+                    "__bbox_units": "pdf",
+                }
+            ]
+        }
+        updated = self.pipeline.degrade_source_facsimile_pages_to_images(
+            source,
+            {0: result},
+            self.root / "work",
+        )
+
+        self.assertNotIn("image_fallback_path", updated[0])
+        self.assertEqual(updated[0]["source_auxiliary_color_raster_candidate_count"], 1)
+        self.assertEqual(updated[0]["source_auxiliary_color_raster_unrepresented_count"], 1)
+        self.assertEqual(updated[0]["source_auxiliary_color_raster_trigger_count"], 0)
 
     def test_overlapping_duplicate_tail_is_merged_but_margin_number_is_kept(self):
         shared_tail = "Wenn sie das Grab und das Kreuz drüber,"
@@ -272,6 +350,8 @@ class LayoutHardeningTests(unittest.TestCase):
         }
         self.assertIn("severe_source_text_loss", kinds)
         self.assertTrue(updated[0]["image_fallback_page"])
+        self.assertTrue(updated[0]["visual_fallback_text_preserved"])
+        self.assertEqual(len(updated[0]["cells"]), 1)
 
     def test_unrepresented_source_graphic_in_ocr_gap_requires_fallback(self):
         source = self.root / "source-graphic-gap.pdf"
@@ -307,6 +387,46 @@ class LayoutHardeningTests(unittest.TestCase):
             reason["kind"] for reason in updated[0]["complex_layout_fallback_reasons"]
         }
         self.assertIn("unrepresented_source_graphic", kinds)
+
+    def test_picture_cell_represents_source_graphic_gap(self):
+        source = self.root / "represented-source-graphic-gap.pdf"
+        with fitz.open() as document:
+            page = document.new_page(width=300, height=400)
+            page.insert_text((35, 45), "Top source paragraph", fontsize=10)
+            page.insert_text((35, 365), "Bottom source paragraph", fontsize=10)
+            for x in range(55, 251, 25):
+                page.draw_line((x, 100), (x, 300), color=(0, 0, 0), width=2)
+            for y in range(100, 301, 25):
+                page.draw_line((55, y), (250, y), color=(0, 0, 0), width=2)
+            document.save(source)
+        result = {
+            "cells": [
+                {
+                    "category": "Text",
+                    "text": "Top source paragraph",
+                    "bbox": [30, 25, 270, 55],
+                    "__bbox_units": "pdf",
+                },
+                {
+                    "category": "Picture",
+                    "text": "",
+                    "bbox": [50, 90, 260, 310],
+                    "__bbox_units": "pdf",
+                },
+                {
+                    "category": "Text",
+                    "text": "Bottom source paragraph",
+                    "bbox": [30, 340, 270, 375],
+                    "__bbox_units": "pdf",
+                },
+            ]
+        }
+        updated = self.pipeline.degrade_complex_layout_pages_to_images(
+            source, {0: result}, self.root / "work"
+        )
+
+        self.assertNotIn("image_fallback_path", updated[0])
+        self.assertEqual(len(updated[0]["cells"]), 3)
 
     def test_extreme_monotonic_number_expansion_is_not_treated_as_a_real_list(self):
         hallucination = "Reference pages " + "–".join(str(value) for value in range(291, 391))

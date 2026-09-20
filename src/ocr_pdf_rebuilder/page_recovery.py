@@ -10,13 +10,28 @@ from .component_runtime import ComponentRuntime
 from .pipeline_config import *
 
 def apply_forward_page_leak_metadata(result, original, validation=None):
-    result["forward_page_content_leak_detected"] = True
-    result["forward_page_content_leak_targets"] = list(
-        original.get("forward_page_content_leak_targets") or []
-    )
-    result["forward_page_content_leak_metrics"] = list(
-        original.get("forward_page_content_leak_metrics") or []
-    )
+    for key in (
+        "forward_page_content_leak_detected",
+        "forward_page_content_leak_targets",
+        "forward_page_content_leak_metrics",
+        "backward_page_content_leak_detected",
+        "backward_page_content_leak_targets",
+        "backward_page_content_leak_metrics",
+        "cross_page_content_leak_detected",
+        "cross_page_content_leak_targets",
+        "cross_page_content_leak_metrics",
+    ):
+        if key in original:
+            value = original.get(key)
+            result[key] = list(value) if isinstance(value, list) else value
+    if not result.get("cross_page_content_leak_detected"):
+        targets = sorted(
+            set(result.get("forward_page_content_leak_targets") or [])
+            | set(result.get("backward_page_content_leak_targets") or [])
+        )
+        if targets:
+            result["cross_page_content_leak_detected"] = True
+            result["cross_page_content_leak_targets"] = targets
     if validation is not None:
         result["forward_page_content_leak_retry_validation"] = validation
     append_retry_reason(result, FORWARD_PAGE_LEAK_RETRY_REASON)
@@ -30,7 +45,7 @@ def repair_forward_page_content_leaks(
     api_session=None,
 ):
     source_texts = source_page_overlap_texts(pdf_path)
-    detected = detect_forward_page_content_leaks(
+    detected = detect_cross_page_content_leaks(
         pdf_path,
         page_results,
         source_texts=source_texts,
@@ -41,7 +56,7 @@ def repair_forward_page_content_leaks(
         return page_results
 
     log(
-        f"    Forward page-content leak detected on {len(candidates)} page(s): "
+        f"    Cross-page content leak detected on {len(candidates)} page(s): "
         + ", ".join(str(page_index + 1) for page_index in candidates)
     )
     retry_results = {}
@@ -70,7 +85,7 @@ def repair_forward_page_content_leaks(
                 api_session=api_session,
             )
         except Exception as exc:
-            log(f"    Isolated MinerU repair batch {batch_number} failed: {exc}")
+            log(f"    Isolated MinerU cross-page repair batch {batch_number} failed: {exc}")
             for page_index in batch:
                 retry_errors[page_index] = str(exc)
             continue
@@ -106,6 +121,7 @@ def repair_forward_page_content_leaks(
                 retry_result["source_page_retry"] = True
                 retry_result["retry_page"] = page_index + 1
                 retry_result["forward_page_content_leak_repaired"] = True
+                retry_result["cross_page_content_leak_repaired"] = True
                 retry_result["forward_page_content_leak_repair_mode"] = "isolated_mineru"
                 page_results[page_index] = retry_result
                 repaired.append(page_index + 1)
@@ -116,6 +132,8 @@ def repair_forward_page_content_leaks(
                 apply_forward_page_leak_metadata(fallback_result, original, validation)
                 fallback_result["forward_page_content_leak_repaired"] = True
                 fallback_result["forward_page_content_leak_source_text_fallback"] = True
+                fallback_result["cross_page_content_leak_repaired"] = True
+                fallback_result["cross_page_content_leak_source_text_fallback"] = True
                 fallback_result["forward_page_content_leak_repair_mode"] = "source_pdf_page_text"
                 append_retry_reason(
                     fallback_result,
@@ -142,6 +160,7 @@ def repair_forward_page_content_leaks(
                 "image_fallback_page": True,
                 "image_fallback_kind": "forward_page_content_leak",
                 "forward_page_content_leak_image_fallback": True,
+                "cross_page_content_leak_image_fallback": True,
                 "forward_page_content_leak_repair_mode": "source_page_image",
             }
             apply_forward_page_leak_metadata(fallback_result, original, validation)
@@ -301,7 +320,7 @@ def retry_unfitting_table_pages_as_text_batch(
             blocks = blocks_from_page_result(result, page_width, page_height)
             if not any(block.get("category") == "Table" for block in blocks):
                 continue
-            blocks.sort(key=lambda b: (is_header_footer(b), b["top"], b["left"], b["order"]))
+            blocks = order_blocks_for_reading(blocks, page_width, page_height)
             blocks = prepare_blocks(blocks, page_width, page_height)
             table_blocks = [block for block in blocks if block.get("category") == "Table"]
             if reportlab_page_fit_failures(page_height, table_blocks):
@@ -348,7 +367,9 @@ def retry_unfitting_table_pages_as_text_batch(
             page_width = float(page.rect.width)
             page_height = float(page.rect.height)
             retry_blocks = blocks_from_page_result(retry_result, page_width, page_height)
-            retry_blocks.sort(key=lambda b: (is_header_footer(b), b["top"], b["left"], b["order"]))
+            retry_blocks = order_blocks_for_reading(
+                retry_blocks, page_width, page_height
+            )
             retry_blocks = prepare_blocks(retry_blocks, page_width, page_height)
             retry_failures = reportlab_page_fit_failures(page_height, retry_blocks)
             if not retry_blocks or retry_failures:
@@ -533,8 +554,8 @@ def source_raster_has_chromatic_pixels(page, xref):
     return False
 
 
-def source_page_auxiliary_color_raster_count(page):
-    """Count small, genuinely colored rasters embedded beside the page scan.
+def source_page_auxiliary_color_rasters(page):
+    """Describe small, genuinely colored rasters embedded beside other images.
 
     A publisher mark or other colored illustration is commonly a second image
     layered over a bi-level page raster.  OCR text cannot reproduce it.  The
@@ -544,9 +565,9 @@ def source_page_auxiliary_color_raster_count(page):
 
     images = list(page.get_images(full=True))
     if len(images) < 2:
-        return 0
+        return []
     largest_area = max(int(image[2]) * int(image[3]) for image in images)
-    count = 0
+    rasters = {}
     for image in images:
         xref = int(image[0])
         width = int(image[2])
@@ -559,8 +580,95 @@ def source_page_auxiliary_color_raster_count(page):
         if str(image[5] or "") in {"", "DeviceGray"}:
             continue
         if source_raster_has_chromatic_pixels(page, xref):
-            count += 1
-    return count
+            try:
+                rects = [fitz.Rect(rect) for rect in page.get_image_rects(xref)]
+            except (RuntimeError, ValueError):
+                rects = []
+            if rects:
+                rasters[xref] = {
+                    "xref": xref,
+                    "width": width,
+                    "height": height,
+                    "rects": rects,
+                }
+    return list(rasters.values())
+
+
+def source_page_auxiliary_color_raster_count(page):
+    return len(source_page_auxiliary_color_rasters(page))
+
+
+def picture_block_rect(block):
+    return fitz.Rect(
+        float(block.get("left", 0.0)),
+        float(block.get("top", 0.0)),
+        float(block.get("left", 0.0)) + float(block.get("width", 0.0)),
+        float(block.get("top", 0.0)) + float(block.get("height", 0.0)),
+    )
+
+
+def picture_block_covers_source_rect(block, source_rect):
+    source_rect = fitz.Rect(source_rect)
+    if source_rect.is_empty or source_rect.get_area() <= 0:
+        return False
+    picture_rect = picture_block_rect(block)
+    intersection = picture_rect & source_rect
+    return (
+        not intersection.is_empty
+        and intersection.get_area() / source_rect.get_area()
+        >= SOURCE_AUXILIARY_COLOR_PICTURE_MIN_COVERAGE
+    )
+
+
+def source_auxiliary_color_raster_coverage(page, result):
+    """Return candidate, covered and unrepresented colored-raster counts.
+
+    Empty Paddle Picture cells are valid source-page crop requests even though
+    they are intentionally omitted from the normal text-block list.  Treat a
+    colored raster as represented when every placement is covered by one of
+    those Picture boxes.
+    """
+
+    rasters = source_page_auxiliary_color_rasters(page)
+    picture_blocks = empty_picture_blocks_from_page_result(
+        result,
+        float(page.rect.width),
+        float(page.rect.height),
+    )
+    covered = 0
+    for raster in rasters:
+        rects = raster.get("rects") or []
+        if rects and all(
+            any(
+                picture_block_covers_source_rect(block, rect)
+                for block in picture_blocks
+            )
+            for rect in rects
+        ):
+            covered += 1
+    return len(rasters), covered, len(rasters) - covered
+
+
+def preserve_text_for_visual_fallback(result):
+    """Keep usable OCR text while the image variant uses a source-page image."""
+
+    text_cells = [
+        cell
+        for cell in (result.get("cells") or [])
+        if normalize_category(cell.get("category")) != "Picture"
+        and normalize_text(get_text_from_cell(cell)).strip()
+    ]
+    if not text_cells:
+        result["cells"] = []
+        result["fallback_text"] = ""
+        result["md_nohf_text"] = ""
+        return False
+    result["visual_fallback_text_preserved"] = True
+    result["visual_fallback_preserved_cell_count"] = len(result.get("cells") or [])
+    result["visual_fallback_preserved_text_chars"] = sum(
+        len(normalize_text(get_text_from_cell(cell)).strip()) for cell in text_cells
+    )
+    return True
 
 
 def degrade_source_facsimile_pages_to_images(pdf_path, page_results, work_dir):
@@ -574,7 +682,32 @@ def degrade_source_facsimile_pages_to_images(pdf_path, page_results, work_dir):
             if result.get("image_fallback_path") or result.get("blank_page"):
                 continue
             large_raster_count = source_page_large_raster_count(page)
-            auxiliary_color_count = source_page_auxiliary_color_raster_count(page)
+            (
+                auxiliary_color_candidate_count,
+                auxiliary_color_covered_count,
+                auxiliary_color_unrepresented_count,
+            ) = source_auxiliary_color_raster_coverage(page, result)
+            # The auxiliary-color heuristic models a colored mark layered over
+            # a page scan.  Vector-text pages with several local diagram images
+            # have no such page raster and must not be promoted to full-page
+            # facsimiles merely because one diagram is smaller than another.
+            auxiliary_color_count = (
+                auxiliary_color_unrepresented_count
+                if large_raster_count >= 1
+                else 0
+            )
+            result["source_auxiliary_color_raster_candidate_count"] = (
+                auxiliary_color_candidate_count
+            )
+            result["source_auxiliary_color_raster_covered_count"] = (
+                auxiliary_color_covered_count
+            )
+            result["source_auxiliary_color_raster_unrepresented_count"] = (
+                auxiliary_color_unrepresented_count
+            )
+            result["source_auxiliary_color_raster_trigger_count"] = (
+                auxiliary_color_count
+            )
             if (
                 large_raster_count < SOURCE_FACSIMILE_MIN_LARGE_RASTERS
                 and auxiliary_color_count == 0
@@ -583,9 +716,7 @@ def degrade_source_facsimile_pages_to_images(pdf_path, page_results, work_dir):
 
             image_path = image_dir / f"page_{page_index + 1:04d}.png"
             render_pdf_page_to_png(pdf_path, page_index, image_path)
-            result["cells"] = []
-            result["fallback_text"] = ""
-            result["md_nohf_text"] = ""
+            preserve_text_for_visual_fallback(result)
             result["needs_retry"] = False
             result["image_fallback_path"] = str(image_path)
             result["image_fallback_page"] = True
@@ -913,6 +1044,9 @@ def degrade_complex_layout_pages_to_images(pdf_path, page_results, work_dir):
             page_width = float(page.rect.width)
             page_height = float(page.rect.height)
             blocks = blocks_from_page_result(result, page_width, page_height)
+            picture_blocks = empty_picture_blocks_from_page_result(
+                result, page_width, page_height
+            )
             reasons = complex_layout_fallback_reasons(
                 result,
                 page_width,
@@ -938,16 +1072,19 @@ def degrade_complex_layout_pages_to_images(pdf_path, page_results, work_dir):
                     )
             if not reasons:
                 reasons.extend(
-                    source_gap_content_evidence(page, blocks, page_width, page_height)
+                    source_gap_content_evidence(
+                        page,
+                        [*blocks, *picture_blocks],
+                        page_width,
+                        page_height,
+                    )
                 )
             if not reasons:
                 continue
 
             image_path = image_dir / f"page_{page_index + 1:04d}.png"
             render_pdf_page_to_png(pdf_path, page_index, image_path)
-            result["cells"] = []
-            result["fallback_text"] = ""
-            result["md_nohf_text"] = ""
+            preserve_text_for_visual_fallback(result)
             result["needs_retry"] = False
             result["image_fallback_path"] = str(image_path)
             result["image_fallback_page"] = True
@@ -1051,7 +1188,12 @@ _COMPONENT_EXPORTS = (
     "degrade_unusable_nonblank_pages_to_images",
     "source_page_large_raster_count",
     "source_raster_has_chromatic_pixels",
+    "source_page_auxiliary_color_rasters",
     "source_page_auxiliary_color_raster_count",
+    "picture_block_rect",
+    "picture_block_covers_source_rect",
+    "source_auxiliary_color_raster_coverage",
+    "preserve_text_for_visual_fallback",
     "degrade_source_facsimile_pages_to_images",
     "normalized_layout_lines",
     "normalized_layout_key",

@@ -17,6 +17,11 @@ import tempfile
 
 import fitz
 
+if __package__:
+    from .reading_order import order_items_for_reading
+else:  # The worker is also launched directly by the Paddle subprocess.
+    from reading_order import order_items_for_reading
+
 
 SCHEMA = 1
 SHORT_REFERENCE_MARKER_RE = re.compile(r"\[(?:\d{1,4}|[A-Za-z]{1,4})\]")
@@ -275,13 +280,7 @@ def normalized_page_result(
                 "__paddle_bbox_content_repair_role"
             )
         cells.append(cell)
-    cells.sort(
-        key=lambda cell: (
-            int(cell.get("__paddle_order", 0)),
-            float(cell["bbox"][1]),
-            float(cell["bbox"][0]),
-        )
-    )
+    cells = order_items_for_reading(cells, image_width, image_height)
     markdown = "\n\n".join(
         markdown_fragment_for_cell(
             str(cell.get("category") or "Text"),

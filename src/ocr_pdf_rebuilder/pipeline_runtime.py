@@ -172,6 +172,7 @@ def forward_page_leak_analyzer():
         ForwardPageLeakConfig(
             retry_reason=FORWARD_PAGE_LEAK_RETRY_REASON,
             lookahead=FORWARD_PAGE_LEAK_LOOKAHEAD,
+            lookbehind=FORWARD_PAGE_LEAK_LOOKBEHIND,
             ngram_size=FORWARD_PAGE_LEAK_NGRAM_SIZE,
             min_source_chars=FORWARD_PAGE_LEAK_MIN_SOURCE_CHARS,
             min_neighbor_chars=FORWARD_PAGE_LEAK_MIN_NEIGHBOR_CHARS,
@@ -213,6 +214,15 @@ def forward_page_leak_matches(output_text, page_index, source_texts):
 
 def detect_forward_page_content_leaks(pdf_path, page_results, source_texts=None, mark=True):
     return forward_page_leak_analyzer().detect(
+        pdf_path,
+        page_results,
+        source_texts=source_texts,
+        mark=mark,
+    )
+
+
+def detect_cross_page_content_leaks(pdf_path, page_results, source_texts=None, mark=True):
+    return forward_page_leak_analyzer().detect_cross_page(
         pdf_path,
         page_results,
         source_texts=source_texts,
@@ -282,6 +292,14 @@ def validate_pdf_has_no_raster_images(pdf_path, validation_scan=None):
 
 def validate_pdf_pages_are_blank(pdf_path, page_indices, validation_scan=None):
     pdf_artifact_validator().validate_pages_are_blank(
+        pdf_path,
+        page_indices,
+        validation_scan,
+    )
+
+
+def validate_pdf_pages_have_text(pdf_path, page_indices, validation_scan=None):
+    pdf_artifact_validator().validate_pages_have_text(
         pdf_path,
         page_indices,
         validation_scan,

@@ -23,6 +23,7 @@ PageResult = dict[str, object]
 class ForwardPageLeakConfig:
     retry_reason: str
     lookahead: int = 5
+    lookbehind: int = 5
     ngram_size: int = 16
     min_source_chars: int = 120
     min_neighbor_chars: int = 500
@@ -78,11 +79,12 @@ class ForwardPageLeakAnalyzer:
         with fitz.open(pdf_path) as doc:
             return [self.normalize_overlap_text(page.get_text("text")) for page in doc]
 
-    def forward_matches(
+    def _neighbor_matches(
         self,
         output_text: str,
         page_index: int,
         source_texts: list[str],
+        direction: str,
     ) -> list[dict[str, object]]:
         config = self.config
         if page_index < 0 or page_index >= len(source_texts):
@@ -99,9 +101,21 @@ class ForwardPageLeakAnalyzer:
         if not output_ngrams:
             return []
 
+        if direction == "forward":
+            target_indexes = range(
+                page_index + 1,
+                min(len(source_texts), page_index + config.lookahead + 1),
+            )
+        elif direction == "backward":
+            target_indexes = range(
+                max(0, page_index - config.lookbehind),
+                page_index,
+            )
+        else:
+            raise ValueError(f"unsupported page-neighbor direction: {direction}")
+
         matches = []
-        stop = min(len(source_texts), page_index + config.lookahead + 1)
-        for target_index in range(page_index + 1, stop):
+        for target_index in target_indexes:
             target_source = source_texts[target_index]
             if len(target_source) < config.min_neighbor_chars:
                 continue
@@ -123,6 +137,91 @@ class ForwardPageLeakAnalyzer:
             )
         return matches
 
+    def forward_matches(
+        self,
+        output_text: str,
+        page_index: int,
+        source_texts: list[str],
+    ) -> list[dict[str, object]]:
+        return self._neighbor_matches(output_text, page_index, source_texts, "forward")
+
+    def backward_matches(
+        self,
+        output_text: str,
+        page_index: int,
+        source_texts: list[str],
+    ) -> list[dict[str, object]]:
+        return self._neighbor_matches(output_text, page_index, source_texts, "backward")
+
+    def cross_page_matches(
+        self,
+        output_text: str,
+        page_index: int,
+        source_texts: list[str],
+    ) -> dict[str, list[dict[str, object]]]:
+        forward = self.forward_matches(output_text, page_index, source_texts)
+        backward = self.backward_matches(output_text, page_index, source_texts)
+        return {
+            "forward": [dict(match, direction="forward") for match in forward],
+            "backward": [dict(match, direction="backward") for match in backward],
+        }
+
+    def _mark_matches(
+        self,
+        result: PageResult,
+        matches: dict[str, list[dict[str, object]]],
+        *,
+        mark_cross: bool,
+    ) -> None:
+        forward = matches["forward"]
+        backward = matches["backward"]
+        if forward:
+            result["forward_page_content_leak_detected"] = True
+            result["forward_page_content_leak_targets"] = [
+                item["target_page"] for item in forward
+            ]
+            result["forward_page_content_leak_metrics"] = forward
+        if backward:
+            result["backward_page_content_leak_detected"] = True
+            result["backward_page_content_leak_targets"] = [
+                item["target_page"] for item in backward
+            ]
+            result["backward_page_content_leak_metrics"] = backward
+        if mark_cross:
+            all_matches = forward + backward
+            result["cross_page_content_leak_detected"] = True
+            result["cross_page_content_leak_targets"] = sorted(
+                {item["target_page"] for item in all_matches}
+            )
+            result["cross_page_content_leak_metrics"] = all_matches
+        result["needs_retry"] = True
+        self.append_retry_reason(result, self.config.retry_reason)
+
+    def _detect(
+        self,
+        pdf_path: Path,
+        page_results: dict[int, PageResult],
+        source_texts: list[str] | None,
+        *,
+        mark: bool,
+        include_backward: bool,
+    ) -> dict[int, list[dict[str, object]]]:
+        source_texts = source_texts or self.source_page_overlap_texts(pdf_path)
+        detected = {}
+        for page_index, result in sorted(page_results.items()):
+            matches = self.cross_page_matches(
+                self.page_result_primary_text(result), page_index, source_texts
+            )
+            if not include_backward:
+                matches["backward"] = []
+            all_matches = matches["forward"] + matches["backward"]
+            if not all_matches:
+                continue
+            detected[page_index] = all_matches
+            if mark:
+                self._mark_matches(result, matches, mark_cross=include_backward)
+        return detected
+
     def detect(
         self,
         pdf_path: Path,
@@ -131,26 +230,31 @@ class ForwardPageLeakAnalyzer:
         *,
         mark: bool = True,
     ) -> dict[int, list[dict[str, object]]]:
-        source_texts = source_texts or self.source_page_overlap_texts(pdf_path)
-        detected = {}
-        for page_index, result in sorted(page_results.items()):
-            matches = self.forward_matches(
-                self.page_result_primary_text(result),
-                page_index,
-                source_texts,
-            )
-            if not matches:
-                continue
-            detected[page_index] = matches
-            if mark:
-                result["forward_page_content_leak_detected"] = True
-                result["forward_page_content_leak_targets"] = [
-                    item["target_page"] for item in matches
-                ]
-                result["forward_page_content_leak_metrics"] = matches
-                result["needs_retry"] = True
-                self.append_retry_reason(result, self.config.retry_reason)
-        return detected
+        return self._detect(
+            pdf_path,
+            page_results,
+            source_texts,
+            mark=mark,
+            include_backward=False,
+        )
+
+    def detect_cross_page(
+        self,
+        pdf_path: Path,
+        page_results: dict[int, PageResult],
+        source_texts: list[str] | None = None,
+        *,
+        mark: bool = True,
+    ) -> dict[int, list[dict[str, object]]]:
+        """Detect output pages containing text from either adjacent direction."""
+
+        return self._detect(
+            pdf_path,
+            page_results,
+            source_texts,
+            mark=mark,
+            include_backward=True,
+        )
 
     def retry_result_is_page_local(
         self,
@@ -171,16 +275,20 @@ class ForwardPageLeakAnalyzer:
             else 0.0
         )
         length_ratio = len(retry_text) / max(1, len(source_text))
-        forward_matches = self.forward_matches(retry_text, page_index, source_texts)
+        matches = self.cross_page_matches(retry_text, page_index, source_texts)
+        forward_matches = matches["forward"]
+        backward_matches = matches["backward"]
         metrics = {
             "own_source_coverage": round(own_coverage, 6),
             "retry_source_length_ratio": round(length_ratio, 6),
             "forward_matches": forward_matches,
+            "backward_matches": backward_matches,
         }
         valid = (
             own_coverage >= self.config.min_retry_own_coverage
             and length_ratio <= self.config.max_retry_source_ratio
             and not forward_matches
+            and not backward_matches
         )
         if not valid:
             metrics["reason"] = "isolated MinerU result failed page-local text validation"

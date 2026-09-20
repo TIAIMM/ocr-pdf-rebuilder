@@ -232,7 +232,7 @@ def process_pdf(pdf_path, index, total):
             elif result.get("filtered"):
                 log(f"        Page {page_index + 1}: MinerU reported filtered/cleaned JSON")
 
-            blocks.sort(key=lambda b: (is_header_footer(b), b["top"], b["left"], b["order"]))
+            blocks = order_blocks_for_reading(blocks, page_width, page_height)
             blocks = prepare_blocks(blocks, page_width, page_height)
 
             blocks, fit_failures = fallback_unfitting_layout_page(
@@ -258,14 +258,7 @@ def process_pdf(pdf_path, index, total):
                         result, page_width, page_height
                     )
                 )
-                blocks.sort(
-                    key=lambda block: (
-                        is_header_footer(block),
-                        block["top"],
-                        block["left"],
-                        block["order"],
-                    )
-                )
+                blocks = order_blocks_for_reading(blocks, page_width, page_height)
         for block in blocks:
             block["page_index"] = page_index
             block["source_pdf_path"] = str(pdf_path)

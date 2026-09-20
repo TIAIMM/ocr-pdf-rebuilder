@@ -72,6 +72,17 @@ class ForwardPageLeakRepairTests(unittest.TestCase):
         )
         self.assertFalse(local[0]["needs_retry"])
 
+    def test_cross_page_detector_finds_backward_page_text(self):
+        pdf_path, page_texts = self.make_source_pdf()
+        leaking = {1: self.page_result(page_texts[0] + "\n" + page_texts[1])}
+
+        detected = self.pipeline.detect_cross_page_content_leaks(pdf_path, leaking)
+
+        self.assertEqual(list(detected), [1])
+        self.assertEqual(leaking[1]["backward_page_content_leak_targets"], [1])
+        self.assertEqual(leaking[1]["cross_page_content_leak_targets"], [1])
+        self.assertTrue(leaking[1]["needs_retry"])
+
     def test_isolated_retry_pdf_places_blank_page_after_each_candidate(self):
         pdf_path, _page_texts = self.make_source_pdf()
         isolated_path = self.root / "isolated.pdf"

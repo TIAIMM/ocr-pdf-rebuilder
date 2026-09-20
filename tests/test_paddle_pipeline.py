@@ -122,6 +122,49 @@ class PaddlePipelineTests(unittest.TestCase):
         self.assertEqual(result["image_size"], [1000, 1400])
         self.assertTrue(all(cell["__bbox_units"] == "image" for cell in result["cells"]))
 
+    def test_paddle_worker_normalizes_clear_columns_in_reading_order(self):
+        raw = {
+            "res": {
+                "parsing_res_list": [
+                    {
+                        "block_label": "text",
+                        "block_content": "R1",
+                        "block_bbox": [560, 100, 900, 160],
+                        "block_order": 0,
+                    },
+                    {
+                        "block_label": "text",
+                        "block_content": "L1",
+                        "block_bbox": [100, 100, 440, 160],
+                        "block_order": 1,
+                    },
+                    {
+                        "block_label": "text",
+                        "block_content": "R2",
+                        "block_bbox": [560, 190, 900, 250],
+                        "block_order": 2,
+                    },
+                    {
+                        "block_label": "text",
+                        "block_content": "L2",
+                        "block_bbox": [100, 190, 440, 250],
+                        "block_order": 3,
+                    },
+                ]
+            }
+        }
+
+        result = paddle_worker.normalized_page_result(
+            raw,
+            page_index=0,
+            image_width=1000,
+            image_height=1400,
+            raw_json_path=Path("raw.json"),
+        )
+
+        self.assertEqual([cell["text"] for cell in result["cells"]], ["L1", "L2", "R1", "R2"])
+        self.assertEqual(result["md_nohf_text"], "L1\n\nL2\n\nR1\n\nR2")
+
     def test_marker_body_text_is_reassigned_to_adjacent_empty_layout_bbox(self):
         quotation = (
             "我们不能想象在时间中的传播，除非要么作为物质实体通过空间的漂移，"
@@ -401,6 +444,68 @@ class PaddlePipelineTests(unittest.TestCase):
                 )
                 self.assertLess(min(picture.samples), 30)
                 self.assertIn("Picture caption", image_document[0].get_text())
+
+    def test_visual_fallback_keeps_text_outputs_and_image_variant_facsimile(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source-visual-fallback.pdf"
+            fallback_png = root / "fallback.png"
+            with fitz.open() as document:
+                page = document.new_page(width=300, height=400)
+                page.insert_text((40, 60), "Source visual heading", fontsize=12)
+                page.draw_rect(
+                    fitz.Rect(50, 100, 250, 300),
+                    color=(0, 0, 0),
+                    fill=(0, 0, 0),
+                )
+                pixmap = page.get_pixmap(alpha=False)
+                pixmap.save(fallback_png)
+                document.save(source)
+
+            result = {
+                "cells": [
+                    {
+                        "bbox": [40, 35, 260, 70],
+                        "category": "Text",
+                        "text": "Preserved OCR heading",
+                        "__bbox_units": "pdf",
+                    }
+                ],
+                "fallback_text": "",
+                "filtered": False,
+                "needs_retry": False,
+                "image_size": None,
+                "md_nohf_text": "Preserved OCR heading",
+                "image_fallback_path": str(fallback_png),
+                "image_fallback_page": True,
+                "image_fallback_kind": "complex_layout",
+                "visual_fallback_text_preserved": True,
+            }
+            output_pdf = root / "output.pdf"
+            output_images = root / "output_with_images.pdf"
+            output_md = root / "output.md"
+            with mock.patch.object(paddle_pipeline, "write_paddle_qc_report"):
+                fallback_pages = paddle_pipeline.build_outputs(
+                    source,
+                    {0: result},
+                    root / "work",
+                    root / "raw",
+                    output_pdf,
+                    output_images,
+                    output_md,
+                )
+
+            self.assertEqual(fallback_pages, [0])
+            self.assertIn("Preserved OCR heading", output_md.read_text(encoding="utf-8"))
+            with fitz.open(output_pdf) as text_document:
+                self.assertIn("Preserved OCR heading", text_document[0].get_text())
+                self.assertFalse(text_document[0].get_images(full=True))
+            with fitz.open(output_images) as image_document:
+                self.assertTrue(image_document[0].get_images(full=True))
+                self.assertNotIn("Preserved OCR heading", image_document[0].get_text())
+            searchable = output_pdf.with_name("output_searchable.pdf")
+            with fitz.open(searchable) as searchable_document:
+                self.assertIn("Preserved OCR heading", searchable_document[0].get_text())
 
     def test_unsupported_glyphs_never_emit_null_and_wave_function_psi_is_repaired(self):
         self.assertEqual(

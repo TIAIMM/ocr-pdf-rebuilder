@@ -16,6 +16,8 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
 from ocr_pdf_rebuilder.gui import (  # noqa: E402
+    DEFAULT_OUTPUT_DIR,
+    DEFAULT_SUMMARY_PATH,
     GuiController,
     GuiHttpServer,
     make_handler,
@@ -84,6 +86,10 @@ class GuiControllerTests(unittest.TestCase):
 
     def test_default_command_selects_engine_specific_entry(self):
         self.assertEqual(
+            GuiController._default_command()[-1],
+            "ocr_pdf_rebuilder.paddle_textonly_pdf",
+        )
+        self.assertEqual(
             GuiController._default_command("mineru")[-1],
             "ocr_pdf_rebuilder.mineru_pipeline",
         )
@@ -91,6 +97,13 @@ class GuiControllerTests(unittest.TestCase):
             GuiController._default_command("paddle")[-1],
             "ocr_pdf_rebuilder.paddle_textonly_pdf",
         )
+
+    def test_gui_defaults_to_paddleocr_paths(self):
+        controller = GuiController()
+
+        self.assertEqual(controller.status()["pipeline"], "paddle")
+        self.assertEqual(controller.output_dir, DEFAULT_OUTPUT_DIR)
+        self.assertEqual(controller.summary_path, DEFAULT_SUMMARY_PATH)
 
     def test_run_captures_utf8_log_and_exit_state(self):
         (self.input_dir / "sample.pdf").write_bytes(b"fixture")

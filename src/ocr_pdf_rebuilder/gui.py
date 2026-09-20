@@ -30,8 +30,8 @@ DEFAULT_RUNTIME_ROOT = Path(
     os.environ.get("OCR_RUNTIME_ROOT", Path(__file__).resolve().parents[2])
 ).expanduser().resolve()
 DEFAULT_INPUT_DIR = DEFAULT_RUNTIME_ROOT / "input"
-DEFAULT_OUTPUT_DIR = DEFAULT_RUNTIME_ROOT / "pdf_mineru"
-DEFAULT_SUMMARY_PATH = DEFAULT_RUNTIME_ROOT / "logs_mineru/batch_summary.json"
+DEFAULT_OUTPUT_DIR = DEFAULT_RUNTIME_ROOT / "pdf_paddle"
+DEFAULT_SUMMARY_PATH = DEFAULT_RUNTIME_ROOT / "logs_paddle/batch_summary.json"
 PIPELINES = {
     "mineru": {
         "module": "ocr_pdf_rebuilder.mineru_pipeline",
@@ -80,7 +80,7 @@ class GuiController:
             self.output_dir == DEFAULT_OUTPUT_DIR
             and self.summary_path == DEFAULT_SUMMARY_PATH
         )
-        self._pipeline = "mineru"
+        self._pipeline = "paddle"
         self._lock = threading.RLock()
         self._process: subprocess.Popen[bytes] | None = None
         self._process_group_id: int | None = None
@@ -98,7 +98,7 @@ class GuiController:
         self._active_parser_page_start = 1
 
     @staticmethod
-    def _default_command(pipeline: str = "mineru") -> list[str]:
+    def _default_command(pipeline: str = "paddle") -> list[str]:
         module = str(PIPELINES[pipeline]["module"])
         return [sys.executable, "-u", "-m", module]
 
@@ -515,7 +515,7 @@ class GuiController:
             )
         return payload
 
-    def start(self, pipeline: str = "mineru") -> None:
+    def start(self, pipeline: str = "paddle") -> None:
         with self._lock:
             if self._process is not None and self._process.poll() is None:
                 raise RuntimeError("生成任务已经在运行")
@@ -780,9 +780,9 @@ HTML_PAGE = r"""<!doctype html>
       <h2>控制</h2>
       <div id="inputPath" class="path"></div>
       <label class="path" for="pipeline">主识别管线</label>
-      <select id="pipeline"><option value="mineru">MinerU</option><option value="paddle">PaddleOCR-VL</option></select>
+      <select id="pipeline"><option value="paddle" selected>PaddleOCR-VL</option><option value="mineru">MinerU</option></select>
       <div class="actions"><button id="start">开始生成</button><button id="stop" class="secondary">安全停止</button></div>
-      <div class="hint">每次处理输入目录中的全部 PDF；已完成且完整性匹配的文件会复用检查点。MinerU 首次加载模型及单个分块推理可能数分钟不输出页码；实时日志每 30 秒显示一次“进程存活”心跳，请勿仅因进度条暂时不动而重启。</div>
+      <div class="hint">每次处理输入目录中的全部 PDF；默认使用 PaddleOCR-VL；已完成且完整性匹配的文件会复用检查点。首次加载模型及单个分块推理可能数分钟不输出页码；实时日志每 30 秒显示一次“进程存活”心跳，请勿仅因进度条暂时不动而重启。</div>
       <div id="message" class="message"></div>
     </div>
     <div class="card">
@@ -916,7 +916,7 @@ def make_handler(controller: GuiController, csrf_token: str):
             try:
                 parsed = urlparse(self.path)
                 if parsed.path == "/api/start":
-                    pipeline = parse_qs(parsed.query).get("pipeline", ["mineru"])[0]
+                    pipeline = parse_qs(parsed.query).get("pipeline", ["paddle"])[0]
                     controller.start(pipeline)
                 elif parsed.path == "/api/stop":
                     controller.stop()

@@ -70,7 +70,7 @@ PADDLE_DPI = shared.DPI
 PADDLE_PROCESS_TIMEOUT_SECONDS = 24 * 60 * 60
 PADDLE_PROCESS_IDLE_TIMEOUT_SECONDS = 30 * 60
 PADDLE_PROCESS_TERMINATE_GRACE_SECONDS = 20
-OUTPUT_VERSION = "paddleocr-vl-1.6-reportlab-searchable-v13-picture-crops"
+OUTPUT_VERSION = "paddleocr-vl-1.6-reportlab-searchable-v14-safe-visual-fallback-text"
 CHECKPOINT_SCHEMA = 1
 SKIP_EXISTING = True
 
@@ -632,14 +632,14 @@ def repair_forward_leaks(
     session: dict[str, str | None],
 ) -> dict[int, dict[str, object]]:
     source_texts = shared.source_page_overlap_texts(pdf_path)
-    detected = shared.detect_forward_page_content_leaks(
+    detected = shared.detect_cross_page_content_leaks(
         pdf_path, page_results, source_texts=source_texts, mark=True
     )
     pages = sorted(detected)
     if not pages:
         return page_results
     log(
-        "    PaddleOCR forward-page leak candidates: "
+        "    PaddleOCR cross-page leak candidates: "
         + ", ".join(str(page + 1) for page in pages)
     )
     run_worker(
@@ -663,6 +663,7 @@ def repair_forward_leaks(
                 shared.apply_forward_page_leak_metadata(candidate, original, validation)
                 candidate["source_page_retry"] = True
                 candidate["forward_page_content_leak_repaired"] = True
+                candidate["cross_page_content_leak_repaired"] = True
                 candidate["forward_page_content_leak_repair_mode"] = "isolated_paddleocr"
                 page_results[page_index] = candidate
                 continue
@@ -671,6 +672,8 @@ def repair_forward_leaks(
                 shared.apply_forward_page_leak_metadata(fallback, original, validation)
                 fallback["forward_page_content_leak_repaired"] = True
                 fallback["forward_page_content_leak_source_text_fallback"] = True
+                fallback["cross_page_content_leak_repaired"] = True
+                fallback["cross_page_content_leak_source_text_fallback"] = True
                 fallback["forward_page_content_leak_repair_mode"] = "source_pdf_page_text"
                 shared.append_retry_reason(
                     fallback, shared.FORWARD_PAGE_LEAK_SOURCE_TEXT_FALLBACK_REASON
@@ -691,6 +694,7 @@ def repair_forward_leaks(
                 "image_fallback_page": True,
                 "image_fallback_kind": "forward_page_content_leak",
                 "forward_page_content_leak_image_fallback": True,
+                "cross_page_content_leak_image_fallback": True,
                 "forward_page_content_leak_repair_mode": "source_page_image",
             }
             shared.apply_forward_page_leak_metadata(fallback, original, validation)
@@ -745,6 +749,24 @@ def write_paddle_qc_report(
                 ),
                 "source_auxiliary_color_raster_count": result.get(
                     "source_auxiliary_color_raster_count"
+                ) or 0,
+                "source_auxiliary_color_raster_candidate_count": result.get(
+                    "source_auxiliary_color_raster_candidate_count"
+                ) or 0,
+                "source_auxiliary_color_raster_covered_count": result.get(
+                    "source_auxiliary_color_raster_covered_count"
+                ) or 0,
+                "source_auxiliary_color_raster_unrepresented_count": result.get(
+                    "source_auxiliary_color_raster_unrepresented_count"
+                ) or 0,
+                "source_auxiliary_color_raster_trigger_count": result.get(
+                    "source_auxiliary_color_raster_trigger_count"
+                ) or 0,
+                "visual_fallback_text_preserved": bool(
+                    result.get("visual_fallback_text_preserved")
+                ),
+                "visual_fallback_preserved_cell_count": result.get(
+                    "visual_fallback_preserved_cell_count"
                 ) or 0,
                 "complex_layout_fallback_reasons": result.get(
                     "complex_layout_fallback_reasons"
@@ -822,10 +844,15 @@ def build_outputs(
                 page_index,
                 {"cells": [], "fallback_text": "", "filtered": False, "image_size": None},
             )
-            if result.get("image_fallback_path"):
+            visual_fallback_path = result.get("image_fallback_path")
+            preserve_visual_fallback_text = bool(
+                visual_fallback_path
+                and result.get("visual_fallback_text_preserved")
+            )
+            if visual_fallback_path and not preserve_visual_fallback_text:
                 blocks = [
                     shared.image_fallback_block(
-                        result["image_fallback_path"], page_width, page_height
+                        visual_fallback_path, page_width, page_height
                     )
                 ]
                 log(f"        Page {page_index + 1}: used source page image fallback")
@@ -966,13 +993,8 @@ def build_outputs(
                         result["fallback_text"], 0, page_width, page_height
                     )
                     blocks = [block] if block else []
-                blocks.sort(
-                    key=lambda block: (
-                        shared.is_header_footer(block),
-                        block["top"],
-                        block["left"],
-                        block["order"],
-                    )
+                blocks = shared.order_blocks_for_reading(
+                    blocks, page_width, page_height
                 )
                 blocks = shared.prepare_blocks(blocks, page_width, page_height)
                 blocks, failures = shared.fallback_unfitting_layout_page(
@@ -1019,13 +1041,21 @@ def build_outputs(
                             source_rotation,
                         )
                     blocks.extend(picture_blocks)
-                    blocks.sort(
-                        key=lambda block: (
-                            shared.is_header_footer(block),
-                            block["top"],
-                            block["left"],
-                            block["order"],
-                        )
+                    blocks = shared.order_blocks_for_reading(
+                        blocks, page_width, page_height
+                    )
+                if preserve_visual_fallback_text and not any(
+                    block.get("category") == "ImageFallback" for block in blocks
+                ):
+                    blocks = [
+                        shared.image_fallback_block(
+                            visual_fallback_path, page_width, page_height
+                        ),
+                        *blocks,
+                    ]
+                    log(
+                        f"        Page {page_index + 1}: retained OCR text while the "
+                        "image variant uses a source-page fallback"
                     )
             for block in blocks:
                 block["page_index"] = page_index
@@ -1068,7 +1098,24 @@ def build_outputs(
     )
     shared.validate_pdf_page_count(output_pdf, page_count, validation)
     shared.validate_pdf_has_no_raster_images(output_pdf, validation)
-    shared.validate_pdf_pages_are_blank(output_pdf, image_fallback_pages, validation)
+    text_preserving_fallback_pages = [
+        page_index
+        for page_index, (_width, _height, blocks) in enumerate(page_specs)
+        if any(block.get("category") == "ImageFallback" for block in blocks)
+        and any(
+            block.get("category")
+            not in {"Formula", "ImageFallback", "Picture", "Page-header", "Page-footer"}
+            and str(block.get("text") or "").strip()
+            for block in blocks
+        )
+    ]
+    blank_fallback_pages = sorted(
+        set(image_fallback_pages) - set(text_preserving_fallback_pages)
+    )
+    shared.validate_pdf_pages_are_blank(output_pdf, blank_fallback_pages, validation)
+    shared.validate_pdf_pages_have_text(
+        output_pdf, text_preserving_fallback_pages, validation
+    )
 
     image_variant_pages = shared.image_variant_page_indexes(page_specs)
     if image_variant_pages:

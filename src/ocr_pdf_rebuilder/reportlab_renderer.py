@@ -1481,18 +1481,28 @@ def render_blocks_to_pdf_reportlab(
     c = canvas.Canvas(str(output_pdf), pagesize=(page_specs[0][0], page_specs[0][1]))
     for page_no, (page_width, page_height, blocks) in enumerate(page_specs):
         c.setPageSize((page_width, page_height))
-        render_blocks = [
-            *[
-                block
-                for block in blocks
-                if block.get("category") in {"ImageFallback", "Picture"}
-            ],
-            *[
-                block
-                for block in blocks
-                if block.get("category") not in {"ImageFallback", "Picture"}
-            ],
+        full_page_fallbacks = [
+            block for block in blocks if block.get("category") == "ImageFallback"
         ]
+        if include_full_page_images and full_page_fallbacks:
+            # A source-page fallback is the complete visual representation for
+            # the image variant.  OCR text may coexist in the page spec so the
+            # text-only, Markdown and searchable outputs remain useful, but it
+            # must not be painted visibly over the facsimile.
+            render_blocks = full_page_fallbacks
+        else:
+            render_blocks = [
+                *[
+                    block
+                    for block in blocks
+                    if block.get("category") == "Picture"
+                ],
+                *[
+                    block
+                    for block in blocks
+                    if block.get("category") not in {"ImageFallback", "Picture"}
+                ],
+            ]
         for block in render_blocks:
             if block.get("category") == "ImageFallback":
                 if include_full_page_images:

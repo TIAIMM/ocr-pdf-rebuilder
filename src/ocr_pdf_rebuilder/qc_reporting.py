@@ -48,6 +48,16 @@ def collect_qc_suspect_pages(pdf_path, page_results, page_specs, page_count):
                 issues.append("forward_page_content_leak_source_text_fallback")
             if result.get("forward_page_content_leak_image_fallback"):
                 issues.append("forward_page_content_leak_image_fallback")
+            if result.get("backward_page_content_leak_detected"):
+                issues.append("backward_page_content_leak_detected")
+            if result.get("cross_page_content_leak_detected"):
+                issues.append("cross_page_content_leak_detected")
+            if result.get("cross_page_content_leak_repaired"):
+                issues.append("cross_page_content_leak_repaired")
+            if result.get("cross_page_content_leak_source_text_fallback"):
+                issues.append("cross_page_content_leak_source_text_fallback")
+            if result.get("cross_page_content_leak_image_fallback"):
+                issues.append("cross_page_content_leak_image_fallback")
             if result.get("pseudotext_detected") or page_result_has_high_repeated_pseudotext(result):
                 issues.append("high_repeated_pseudotext")
             if result.get("image_fallback_page") or result.get("image_fallback_path"):

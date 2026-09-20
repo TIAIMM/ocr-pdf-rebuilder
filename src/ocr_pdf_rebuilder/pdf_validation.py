@@ -161,6 +161,28 @@ class PdfArtifactValidator:
                 + ", ".join(str(page_no) for page_no in offenders)
             )
 
+    def validate_pages_have_text(
+        self,
+        pdf_path: Path,
+        page_indices: Iterable[int],
+        validation_scan=None,
+    ) -> None:
+        validation_scan = validation_scan or self.scan(pdf_path)
+        text_counts = validation_scan.get("text_char_counts", [])
+        missing = [
+            int(page_index) + 1
+            for page_index in page_indices
+            if not (
+                0 <= int(page_index) < len(text_counts)
+                and text_counts[int(page_index)] > 0
+            )
+        ]
+        if missing:
+            raise RuntimeError(
+                "Text-preserving fallback pages have no extractable text: "
+                + ", ".join(str(page_no) for page_no in missing)
+            )
+
     def validate_images_on_pages(
         self,
         pdf_path: Path,

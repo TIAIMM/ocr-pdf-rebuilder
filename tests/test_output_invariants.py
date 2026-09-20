@@ -49,6 +49,7 @@ class OutputInvariantTests(unittest.TestCase):
         scan = self.pipeline.scan_pdf_validation(output)
         self.pipeline.validate_pdf_page_count(output, 3, scan)
         self.pipeline.validate_pdf_pages_are_blank(output, [1, 2], scan)
+        self.pipeline.validate_pdf_pages_have_text(output, [0], scan)
         with self.assertRaisesRegex(RuntimeError, "page count"):
             self.pipeline.validate_pdf_page_count(short_output, 3)
 

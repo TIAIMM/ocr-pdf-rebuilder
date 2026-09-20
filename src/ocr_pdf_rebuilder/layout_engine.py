@@ -8,6 +8,7 @@ import fitz
 
 from .component_runtime import ComponentRuntime
 from .pipeline_config import *
+from .reading_order import has_clear_column_layout, order_items_for_reading
 
 def cell_to_block(
     cell,
@@ -112,13 +113,19 @@ def image_fallback_block(image_path, page_width, page_height):
     }
 
 
+def order_blocks_for_reading(blocks, page_width, page_height=None):
+    """Apply the shared page-local reading-order policy to layout blocks."""
+
+    return order_items_for_reading(blocks, page_width, page_height)
+
+
 def blocks_from_page_result(result, page_width, page_height):
     blocks = []
     for order, cell in enumerate(result.get("cells", []) or []):
         block = cell_to_block(cell, order, page_width, page_height, result.get("image_size"))
         if block:
             blocks.append(block)
-    return blocks
+    return order_blocks_for_reading(blocks, page_width, page_height)
 
 
 def empty_picture_blocks_from_page_result(result, page_width, page_height):
@@ -147,7 +154,7 @@ def empty_picture_blocks_from_page_result(result, page_width, page_height):
         if block:
             block["picture_visual_only"] = True
             blocks.append(block)
-    return blocks
+    return order_blocks_for_reading(blocks, page_width, page_height)
 
 
 def image_variant_page_indexes(page_specs):
@@ -2116,7 +2123,7 @@ def reflow_overflow_pair(first, second, page_height):
     second["pair_reflowed"] = True
 
 
-def resolve_strict_bbox_overflows(blocks, page_height):
+def resolve_strict_bbox_overflows(blocks, page_height, page_width=None):
     ordered = sorted(blocks, key=lambda b: (is_header_footer(b), b["top"], b["left"], b["order"]))
     flow_blocks = [block for block in ordered if not is_header_footer(block)]
 
@@ -2132,7 +2139,12 @@ def resolve_strict_bbox_overflows(blocks, page_height):
             continue
         reflow_overflow_pair(block, partner, page_height)
 
-    return sorted(ordered, key=lambda b: (is_header_footer(b), b["top"], b["left"], b["order"]))
+    if page_width is None:
+        page_width = max(
+            (float(block.get("left", 0.0)) + float(block.get("width", 0.0)) for block in ordered),
+            default=1.0,
+        )
+    return order_blocks_for_reading(ordered, page_width, page_height)
 
 
 
@@ -2197,7 +2209,7 @@ def prepare_blocks(blocks, page_width, page_height):
         if block["font_size"] < block["min_font_size"]:
             block["min_font_size"] = block["font_size"]
         prepared.append(block)
-    return resolve_strict_bbox_overflows(prepared, page_height)
+    return resolve_strict_bbox_overflows(prepared, page_height, page_width)
 
 
 def table_block_to_markdown(block):
@@ -2278,7 +2290,14 @@ def blocks_to_markdown_page(blocks, page_index):
 
 def markdown_page_from_result(result, blocks, page_index):
     md_nohf_text = normalize_markdown_latex_text(result.get("md_nohf_text", ""))
-    if md_nohf_text:
+    page_width = max(
+        (
+            float(block.get("left", 0.0)) + float(block.get("width", 0.0))
+            for block in blocks
+        ),
+        default=1.0,
+    )
+    if md_nohf_text and not has_clear_column_layout(blocks, page_width):
         return md_nohf_text
     return blocks_to_markdown_page(blocks, page_index)
 
@@ -2320,6 +2339,7 @@ _COMPONENT_EXPORTS = (
     "cell_to_block",
     "fallback_text_block",
     "image_fallback_block",
+    "order_blocks_for_reading",
     "blocks_from_page_result",
     "empty_picture_blocks_from_page_result",
     "image_variant_page_indexes",

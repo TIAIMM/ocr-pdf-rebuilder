@@ -13,10 +13,11 @@ never be staged.
 1. Enumerate input PDFs without allowing one file failure to abort later files.
 2. Fingerprint the source, parser configuration, selected engine runtime and
    model cache.
-3. Run the selected OCR engine in a new POSIX process group with total and idle
-   timeouts.
+3. Run the selected OCR engine in a POSIX process group or Windows Job Object
+   with total and idle timeouts.
 4. Normalize engine results into page-local cells with category, bbox, text and
-   reading order.
+   reading order. Paddle cells also retain stable source IDs, raw block order
+   and final reading order so reordering can be audited separately from OCR.
 5. Detect repeated pseudotext, missing pages and forward-page content leaks;
    retry narrowly before selecting a safe fallback.
 6. Rebuild page-aligned PDFs with ReportLab.
@@ -34,6 +35,9 @@ never be staged.
 - A failed source file produces a failed batch entry but later files still run.
 - OCR descendants must not survive normal completion, timeout, interruption or
   parent exit.
+- WSL Paddle/vLLM is the default production route. Windows Transformers is an
+  explicitly invoked fallback; it is never started automatically or used for
+  an automatic retry, and its runtime/output directories remain separate.
 - A transient infrastructure failure does not immediately trigger recursive
   splitting.
 - Checkpoints are checksummed and tied to source, configuration and runtime.
@@ -42,6 +46,13 @@ never be staged.
 - Both output variants preserve source page count, including trailing blanks.
 - The searchable variant preserves source page count and rendered pixels; its
   invisible layer only adds extractable text.
+- Paddle page rasterization is capped by `PADDLEOCR_MAX_RASTER_PIXELS` (default
+  24 million); effective DPI and actual dimensions are recorded in each page
+  checkpoint.
+  Pages rendered below 72 DPI are flagged for review, not silently accepted.
+- Picture crops use a source/geometry/render-settings cache key. Image-variant
+  QC records the source-picture count, final picture blocks and actual crops;
+  missing or invalid source picture boxes are flagged.
 
 MinerU additionally chunks long PDFs and prefers `_middle.json` block/line/span
 data. It also emits the searchable variant, which places invisible text from

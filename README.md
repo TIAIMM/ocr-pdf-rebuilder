@@ -1,7 +1,16 @@
 # ocr-pdf-rebuilder
 
+The WSL checkout is the active project.
+PaddleOCR-VL 1.6 through the managed WSL vLLM server is the default OCR route;
+MinerU is selectable manually. Windows-native Transformers support is kept as
+an opt-in fallback in the source and scripts; the WSL project keeps no copy of
+the Windows runtime or models. The former Windows checkout is inactive. It
+never starts automatically or receives failed WSL jobs.
+See [`docs/windows-native-validation.md`](docs/windows-native-validation.md)
+for the earlier measured comparison and restoration requirements.
+
 Resumable, failure-isolated OCR and PDF reconstruction for long multilingual
-documents. The production path uses MinerU layout/OCR results, rebuilds two
+documents. The shared reconstruction path uses PaddleOCR or MinerU results, rebuilds two
 page-aligned PDFs when image fallback is required, and always emits a
 searchable variant that keeps the original scans:
 
@@ -209,16 +218,15 @@ Operational details and recovery rules are in `docs/production-runbook.md` and
 
 ## Local GUI
 
-Start the lightweight local web interface inside WSL:
-
-From the repository root:
+Start the lightweight local web interface from the WSL repository root:
 
 ```bash
 ./scripts/run-gui.sh
 ```
 
 Open `http://localhost:18765/` if the browser does not open automatically. The
-GUI lists PDFs from `input/`, lets the operator select MinerU or PaddleOCR-VL,
+GUI lists PDFs from `input/`, defaults to PaddleOCR-VL and also lets the
+operator select MinerU,
 starts the selected repository batch, streams its console output, requests safe
 process-group cleanup when stopped, displays `batch_summary.json`, and offers generated PDFs
 for download. Per-file progress shows the active stage, weighted total percent,
@@ -232,6 +240,20 @@ remain reusable, but an unfinished MinerU chunk must restart from that chunk's
 first page. MinerU service startup, model preloading and bounded service restart
 are shown as explicit GUI stages. The GUI binds to localhost by default and has
 no upload or delete operation.
+
+The normal CLI entry point `ocr-pdf-rebuilder` uses the same WSL Paddle route;
+`ocr-pdf-rebuilder-mineru` is explicit. Outputs are written under `pdf_paddle/`
+or `pdf_mineru/`. Paddle emits Markdown, a text-only PDF, a source-preserving
+searchable PDF and, when needed, a PDF with source pictures. Only one GPU
+inference batch should run at a time.
+
+The Windows-native code is dormant. To use it later, first create a separate
+Windows checkout, install its environment with `scripts\setup-windows.ps1`,
+obtain the required models and fonts, then explicitly run
+`scripts\run-windows.cmd` or `ocr-pdf-rebuilder-windows`. Neither the default
+WSL launcher nor a WSL failure starts it. No Windows environment, model or
+historical output files were migrated to WSL; only optional code and written
+validation results remain here.
 
 ## License
 

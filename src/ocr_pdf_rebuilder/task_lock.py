@@ -16,22 +16,40 @@ class TaskLockBusyError(RuntimeError):
 
 
 def task_lock_is_held(path: Path) -> bool:
-    """Return whether another open file description owns the POSIX task lock."""
+    """Return whether another process owns this runtime's task lock."""
 
-    if os.name != "posix" or not Path(path).is_file():
+    if not Path(path).is_file():
         return False
-    import fcntl
-
     try:
-        with Path(path).open("r", encoding="utf-8") as stream:
+        with Path(path).open("r+", encoding="utf-8") as stream:
             try:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
+                _lock_stream(stream)
+            except (BlockingIOError, PermissionError):
                 return True
-            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+            _unlock_stream(stream)
     except OSError:
         return False
     return False
+
+
+def _lock_stream(stream: TextIO) -> None:
+    if os.name == "nt":
+        import msvcrt
+        stream.seek(0)
+        msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_stream(stream: TextIO) -> None:
+    if os.name == "nt":
+        import msvcrt
+        stream.seek(0)
+        msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
 def _utc_now() -> str:
@@ -39,7 +57,7 @@ def _utc_now() -> str:
 
 
 class CrossProcessTaskLock:
-    """Non-blocking POSIX advisory lock with human-readable owner metadata."""
+    """Non-blocking platform file lock with human-readable owner metadata."""
 
     def __init__(
         self,
@@ -99,15 +117,11 @@ class CrossProcessTaskLock:
         return ", ".join(details)
 
     def __enter__(self) -> "CrossProcessTaskLock":
-        if os.name != "posix":
-            raise RuntimeError("Cross-process OCR task locking requires a POSIX runtime")
-        import fcntl
-
         self.path.parent.mkdir(parents=True, exist_ok=True)
         stream = self.path.open("a+", encoding="utf-8", newline="\n")
         try:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
+            _lock_stream(stream)
+        except (BlockingIOError, PermissionError) as exc:
             owner = self._read_owner(stream)
             stream.close()
             raise TaskLockBusyError(
@@ -124,7 +138,7 @@ class CrossProcessTaskLock:
             self._write_metadata("running")
         except BaseException:
             try:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+                _unlock_stream(stream)
             finally:
                 stream.close()
                 self._stream = None
@@ -134,13 +148,11 @@ class CrossProcessTaskLock:
     def __exit__(self, _exc_type, _exc, _traceback) -> None:
         if self._stream is None:
             return
-        import fcntl
-
         try:
             self._write_metadata("released")
         finally:
             try:
-                fcntl.flock(self._stream.fileno(), fcntl.LOCK_UN)
+                _unlock_stream(self._stream)
             finally:
                 self._stream.close()
                 self._stream = None

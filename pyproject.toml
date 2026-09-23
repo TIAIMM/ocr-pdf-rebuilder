@@ -11,16 +11,21 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "mineru==3.3.1",
-  "Pillow==12.2.0",
+  "Pillow>=12.2,<13",
   "PyMuPDF==1.27.2.3",
   "reportlab==4.5.1",
   "svglib==2.0.2",
 ]
 
+[project.optional-dependencies]
+mineru = ["mineru==3.3.1"]
+windows-transformers = ["paddleocr[doc-parser]==3.7.0", "transformers==5.11.0"]
+
 [project.scripts]
-ocr-pdf-rebuilder = "ocr_pdf_rebuilder.mineru_pipeline:main"
+ocr-pdf-rebuilder = "ocr_pdf_rebuilder.cli:main"
 ocr-pdf-rebuilder-paddle = "ocr_pdf_rebuilder.paddle_textonly_pdf:main"
+ocr-pdf-rebuilder-mineru = "ocr_pdf_rebuilder.mineru_pipeline:main"
+ocr-pdf-rebuilder-windows = "ocr_pdf_rebuilder.cli:windows_native_main"
 ocr-pdf-rebuilder-gui = "ocr_pdf_rebuilder.gui:main"
 
 [project.urls]

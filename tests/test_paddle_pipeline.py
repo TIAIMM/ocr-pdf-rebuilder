@@ -13,7 +13,8 @@ import fitz
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
-from ocr_pdf_rebuilder import paddle_pipeline, paddle_worker
+from ocr_pdf_rebuilder import paddle_pipeline, paddle_worker, reportlab_renderer
+from ocr_pdf_rebuilder.raster_geometry import bounded_render_dpi
 
 
 class PaddlePipelineTests(unittest.TestCase):
@@ -89,6 +90,64 @@ class PaddlePipelineTests(unittest.TestCase):
         self.assertAlmostEqual(block["width"], 25.2, places=1)
         self.assertAlmostEqual(block["height"], 25.6, places=1)
 
+    def test_raster_budget_preserves_normal_pages_and_caps_large_pages(self):
+        normal = bounded_render_dpi(595, 842, 200, 24_000_000)
+        self.assertEqual(normal["effective_dpi"], 200)
+        self.assertFalse(normal["downscaled"])
+
+        large = bounded_render_dpi(5000, 6000, 200, 1_000_000)
+        self.assertTrue(large["downscaled"])
+        self.assertTrue(large["low_resolution_risk"])
+        self.assertLessEqual(large["estimated_pixels"], 1_000_000)
+        with fitz.open() as document:
+            page = document.new_page(width=5000, height=6000)
+            scale = large["effective_dpi"] / 72.0
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+            self.assertLessEqual(pixmap.width * pixmap.height, 1_000_000)
+
+        with self.assertRaises(ValueError):
+            bounded_render_dpi(595, 842, 200, 0)
+
+    def test_worker_checkpoints_effective_raster_geometry(self):
+        class Prediction:
+            def save_to_json(self, save_path):
+                (Path(save_path) / "prediction.json").write_text(
+                    json.dumps({"parsing_res_list": [
+                        {"block_label": "text", "block_content": "A page",
+                         "block_bbox": [2, 2, 30, 12]}
+                    ]}), encoding="utf-8"
+                )
+
+        class Pipeline:
+            def predict(self, **_kwargs):
+                return [Prediction()]
+
+            def close(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.pdf"
+            with fitz.open() as document:
+                document.new_page(width=300, height=400)
+                document.save(source)
+            args = paddle_worker.build_parser().parse_args([
+                "--pdf", str(source), "--output-dir", str(root / "raw"),
+                "--dpi", "200", "--max-raster-pixels", "10000",
+            ])
+            with mock.patch.object(paddle_worker, "create_pipeline", return_value=Pipeline()):
+                self.assertEqual(paddle_worker.run(args), 0)
+            checkpoint = json.loads(
+                (root / "raw/page_results/page_0001.json").read_text(encoding="utf-8")
+            )
+            raster = checkpoint["rasterization"]
+            self.assertTrue(raster["downscaled"])
+            self.assertLessEqual(raster["actual_pixels"], 10000)
+            self.assertEqual(
+                raster["actual_pixels"],
+                checkpoint["image_size"][0] * checkpoint["image_size"][1],
+            )
+
     def test_paddle_blocks_are_normalized_for_shared_layout_engine(self):
         raw = {
             "res": {
@@ -121,6 +180,10 @@ class PaddlePipelineTests(unittest.TestCase):
         )
         self.assertEqual(result["image_size"], [1000, 1400])
         self.assertTrue(all(cell["__bbox_units"] == "image" for cell in result["cells"]))
+        self.assertEqual([cell["__source_id"] for cell in result["cells"]], [
+            "p0001-b0001", "p0001-b0002"
+        ])
+        self.assertEqual([cell["__reading_order"] for cell in result["cells"]], [0, 1])
 
     def test_paddle_worker_normalizes_clear_columns_in_reading_order(self):
         raw = {
@@ -164,6 +227,78 @@ class PaddlePipelineTests(unittest.TestCase):
 
         self.assertEqual([cell["text"] for cell in result["cells"]], ["L1", "L2", "R1", "R2"])
         self.assertEqual(result["md_nohf_text"], "L1\n\nL2\n\nR1\n\nR2")
+        self.assertEqual(
+            [cell["__source_index"] for cell in result["cells"]], [1, 3, 0, 2]
+        )
+        block = paddle_pipeline.shared.cell_to_block(
+            result["cells"][0], 0, 300, 400, result["image_size"]
+        )
+        self.assertEqual(block["source_id"], "p0001-b0002")
+        self.assertEqual(block["recognition_order"], 1)
+
+    def test_invalid_picture_bbox_is_reported_instead_of_silently_lost(self):
+        raw = {"parsing_res_list": [
+            {"block_label": "image", "block_bbox": [10, 10, 10, 50]},
+            {"block_label": "text", "block_bbox": [10, 50, 100, 90],
+             "block_content": "Valid text"},
+        ]}
+        result = paddle_worker.normalized_page_result(
+            raw, page_index=0, image_width=200, image_height=300,
+            raw_json_path=Path("raw.json"),
+        )
+        self.assertEqual(result["invalid_picture_bbox_count"], 1)
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source.pdf"
+            with fitz.open() as document:
+                document.new_page(width=200, height=300)
+                document.save(source)
+            suspects = paddle_pipeline.shared.collect_qc_suspect_pages(
+                source, {0: result}, [], 1
+            )
+            self.assertIn("picture_invalid_source_bbox", suspects[1])
+
+    def test_picture_crop_cache_is_tied_to_bbox_and_validated(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.pdf"
+            with fitz.open() as document:
+                page = document.new_page(width=200, height=100)
+                page.draw_rect(fitz.Rect(0, 0, 100, 100), fill=(0, 0, 0))
+                document.save(source)
+            block = {
+                "page_index": 0, "order": 0, "source_pdf_path": str(source),
+                "picture_crop_dir": str(root / "crops"), "picture_crop_padding": 0,
+                "picture_crop_dpi": 72,
+            }
+            left = reportlab_renderer.render_picture_crop(
+                fitz.Rect(0, 0, 100, 100), block
+            )
+            self.assertFalse(block["picture_crop_cache_hit"])
+            self.assertEqual(block["picture_crop_image_size"], [100, 100])
+            reportlab_renderer.render_picture_crop(fitz.Rect(0, 0, 100, 100), block)
+            self.assertTrue(block["picture_crop_cache_hit"])
+            left.write_bytes(b"broken cached PNG")
+            reportlab_renderer.render_picture_crop(fitz.Rect(0, 0, 100, 100), block)
+            self.assertFalse(block["picture_crop_cache_hit"])
+            self.assertGreater(left.stat().st_size, len(b"broken cached PNG"))
+            right = reportlab_renderer.render_picture_crop(
+                fitz.Rect(100, 0, 200, 100), block
+            )
+            self.assertNotEqual(left, right)
+            self.assertFalse(block["picture_crop_cache_hit"])
+            self.assertTrue(left.is_file() and right.is_file())
+            source_pdf_path = block["source_pdf_path"]
+            block["picture_crop_max_pixels"] = 5_000
+            smaller = reportlab_renderer.render_picture_crop(
+                fitz.Rect(100, 0, 200, 100), block
+            )
+            self.assertNotEqual(right, smaller)
+            self.assertLessEqual(
+                block["picture_crop_image_size"][0]
+                * block["picture_crop_image_size"][1],
+                5_000,
+            )
+            self.assertEqual(block["source_pdf_path"], source_pdf_path)
 
     def test_marker_body_text_is_reassigned_to_adjacent_empty_layout_bbox(self):
         quotation = (
@@ -245,6 +380,10 @@ class PaddlePipelineTests(unittest.TestCase):
         self.assertIn("paddle_worker.py", command[2])
         self.assertEqual(command[command.index("--pages") + 1], "1,5")
         self.assertIn("--force", command)
+        self.assertEqual(
+            command[command.index("--max-raster-pixels") + 1],
+            str(paddle_pipeline.PADDLE_MAX_RASTER_PIXELS),
+        )
         self.assertEqual(command[command.index("--backend") + 1], "vllm-server")
         self.assertEqual(
             command[command.index("--server-url") + 1],
@@ -425,6 +564,12 @@ class PaddlePipelineTests(unittest.TestCase):
                 )
 
             self.assertEqual(fallback_pages, [])
+            trace = result["layout_trace"]
+            self.assertEqual(trace["source_picture_cell_count"], 1)
+            self.assertEqual(trace["rendered_picture_count"], 1)
+            self.assertTrue(trace["picture_crops"][0]["path"])
+            self.assertFalse(trace["source_order_available"])
+            self.assertEqual(trace["final_picture_block_count"], 1)
             self.assertEqual(
                 paddle_pipeline.shared.image_variant_page_indexes_from_results({0: result}),
                 [0],

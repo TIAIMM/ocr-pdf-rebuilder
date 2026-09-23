@@ -1,6 +1,8 @@
 """ReportLab font selection, measurement, fitting and PDF rendering."""
 
 from functools import lru_cache
+import hashlib
+import json
 from pathlib import Path
 import re
 
@@ -8,6 +10,7 @@ import fitz
 
 from .component_runtime import ComponentRuntime
 from .pipeline_config import *
+from .raster_geometry import DEFAULT_MAX_RASTER_PIXELS, bounded_render_dpi
 
 def reportlab_register_fonts():
     from reportlab.pdfbase import pdfmetrics
@@ -1389,7 +1392,7 @@ def reportlab_page_fit_failures(page_height, blocks):
     return failures
 
 
-def picture_crop_path(block):
+def picture_crop_path(block, source_rect=None, rasterization=None):
     crop_dir = block.get("picture_crop_dir")
     page_index = block.get("page_index")
     if crop_dir is None or page_index is None:
@@ -1399,23 +1402,35 @@ def picture_crop_path(block):
         order = int(block.get("order", 0))
     except (TypeError, ValueError):
         return None
-    return Path(crop_dir) / f"page_{page_number:04d}_picture_{order}.png"
+    if source_rect is None or rasterization is None:
+        return Path(crop_dir) / f"page_{page_number:04d}_picture_{order}.png"
+    source_pdf = Path(block["source_pdf_path"])
+    source_stat = source_pdf.stat()
+    identity = {
+        "source": str(source_pdf.resolve()),
+        "size": source_stat.st_size,
+        "mtime_ns": source_stat.st_mtime_ns,
+        "page_index": page_index,
+        "source_rect": [round(float(value), 4) for value in source_rect],
+        "rotation": int(block.get("source_orientation_correction_degrees") or 0) % 360,
+        "dpi": round(float(rasterization["effective_dpi"]), 4),
+    }
+    digest = hashlib.sha256(
+        json.dumps(identity, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:16]
+    return Path(crop_dir) / f"page_{page_number:04d}_picture_{order}_{digest}.png"
 
 
 def render_picture_crop(rect, block):
     """Render a source-page Picture bbox for the image-inclusive variant."""
 
-    crop_path = picture_crop_path(block)
     source_pdf = block.get("source_pdf_path")
     page_index = block.get("page_index")
-    if crop_path is None or source_pdf is None or page_index is None:
+    if block.get("picture_crop_dir") is None or source_pdf is None or page_index is None:
         raise RuntimeError(
             "Picture block has no source crop metadata: "
             f"page={page_index}, order={block.get('order')}"
         )
-    crop_path.parent.mkdir(parents=True, exist_ok=True)
-    if crop_path.is_file() and crop_path.stat().st_size > 0:
-        return crop_path
 
     rotation = int(block.get("source_orientation_correction_degrees") or 0) % 360
     if rotation not in {0, 180}:
@@ -1443,7 +1458,35 @@ def render_picture_crop(rect, block):
                 "Picture source crop is empty: "
                 f"page={page_index + 1}, order={block.get('order')}"
             )
-        dpi = max(72.0, float(block.get("picture_crop_dpi", PICTURE_CROP_RENDER_DPI)))
+        rasterization = bounded_render_dpi(
+            source_rect.width,
+            source_rect.height,
+            max(72.0, float(block.get("picture_crop_dpi", PICTURE_CROP_RENDER_DPI))),
+            int(block.get("picture_crop_max_pixels", DEFAULT_MAX_RASTER_PIXELS)),
+        )
+        crop_path = picture_crop_path(block, source_rect, rasterization)
+        if crop_path is None:
+            raise RuntimeError(
+                "Picture block has invalid crop identity: "
+                f"page={page_index + 1}, order={block.get('order')}"
+            )
+        crop_path.parent.mkdir(parents=True, exist_ok=True)
+        block["picture_crop_clip_rect"] = [float(value) for value in source_rect]
+        block["picture_crop_rasterization"] = rasterization
+        block["picture_crop_path"] = str(crop_path)
+        if crop_path.is_file() and crop_path.stat().st_size > 0:
+            from PIL import Image
+
+            try:
+                with Image.open(crop_path) as existing:
+                    existing.verify()
+                with Image.open(crop_path) as existing:
+                    block["picture_crop_image_size"] = list(existing.size)
+                block["picture_crop_cache_hit"] = True
+                return crop_path
+            except (OSError, ValueError):
+                pass
+        dpi = float(rasterization["effective_dpi"])
         matrix = fitz.Matrix(dpi / 72.0, dpi / 72.0)
         if rotation:
             matrix = matrix.prerotate(rotation)
@@ -1453,7 +1496,14 @@ def render_picture_crop(rect, block):
                 "Picture source crop rendered empty: "
                 f"page={page_index + 1}, order={block.get('order')}"
             )
+        if pixmap.width * pixmap.height > int(rasterization["max_pixels"]):
+            raise RuntimeError(
+                "Picture source crop exceeded pixel budget: "
+                f"page={page_index + 1}, order={block.get('order')}"
+            )
         pixmap.save(str(crop_path))
+        block["picture_crop_image_size"] = [pixmap.width, pixmap.height]
+        block["picture_crop_cache_hit"] = False
     return crop_path
 
 

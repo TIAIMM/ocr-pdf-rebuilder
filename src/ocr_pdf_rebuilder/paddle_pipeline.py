@@ -11,6 +11,7 @@ from pathlib import Path
 import socket
 import shutil
 import subprocess
+import sys
 import time
 from urllib.error import URLError
 from urllib.request import ProxyHandler, build_opener
@@ -19,6 +20,7 @@ import fitz
 
 from .batch_runner import PdfBatchRunner
 from . import pipeline_runtime as shared
+from .raster_geometry import DEFAULT_MAX_RASTER_PIXELS
 
 
 RUNTIME_ROOT = shared.RUNTIME_ROOT
@@ -29,22 +31,29 @@ TMP_DIR = RUNTIME_ROOT / "tmp/paddle_textonly_pdf"
 LOG_DIR = RUNTIME_ROOT / "logs_paddle"
 QC_DIR = RUNTIME_ROOT / "qc_paddle"
 
-PADDLE_PYTHON = Path(
-    os.environ.get(
-        "PADDLEOCR_PYTHON",
-        "/home/ocr/miniconda3/envs/paddleocr/bin/python",
-    )
-).expanduser()
+WINDOWS_NATIVE = os.name == "nt"
+PADDLE_PYTHON = Path(os.environ.get("PADDLEOCR_PYTHON", (
+    sys.executable if WINDOWS_NATIVE else "/home/ocr/miniconda3/envs/paddleocr/bin/python"
+))).expanduser()
 PADDLE_DEVICE = os.environ.get("PADDLEOCR_DEVICE", "gpu:0")
 # This value is PaddleOCR's model protocol selector, not this repository's
 # release number. PaddleOCR-VL 1.6 accepts only v1/v1.5/v1.6.
 PADDLE_PIPELINE_VERSION = "v1.6"
 PADDLE_LAYOUT_MODEL = "PP-DocLayoutV3"
 PADDLE_RECOGNITION_MODEL = "PaddleOCR-VL-1.6-0.9B"
-PADDLE_BACKEND = os.environ.get("PADDLEOCR_VL_BACKEND", "vllm-server")
+PADDLE_BACKEND = os.environ.get("PADDLEOCR_VL_BACKEND", "native" if WINDOWS_NATIVE else "vllm-server")
+PADDLE_ENGINE = os.environ.get("PADDLEOCR_ENGINE", "transformers" if WINDOWS_NATIVE else "")
 PADDLE_MAX_NEW_TOKENS = 2048
 PADDLE_MODEL_SOURCE = os.environ.get("PADDLE_PDX_MODEL_SOURCE", "ModelScope")
-PADDLE_MODEL_ROOT = Path.home() / ".paddlex/official_models"
+PADDLE_MODEL_ROOT = Path(os.environ.get("PADDLEOCR_MODEL_ROOT", str(
+    RUNTIME_ROOT / "models" if WINDOWS_NATIVE else Path.home() / ".paddlex/official_models"
+))).expanduser()
+PADDLE_LAYOUT_MODEL_DIR = Path(os.environ.get("PADDLEOCR_LAYOUT_MODEL_DIR", str(
+    PADDLE_MODEL_ROOT / ("PP-DocLayoutV3_safetensors" if PADDLE_ENGINE == "transformers" else PADDLE_LAYOUT_MODEL)
+))).expanduser()
+PADDLE_RECOGNITION_MODEL_DIR = Path(os.environ.get("PADDLEOCR_RECOGNITION_MODEL_DIR", str(
+    PADDLE_MODEL_ROOT / "PaddleOCR-VL-1.6"
+))).expanduser()
 VLLM_PYTHON = Path(
     os.environ.get(
         "PADDLEOCR_VLLM_PYTHON",
@@ -67,6 +76,11 @@ VLLM_START_TIMEOUT_SECONDS = float(
     os.environ.get("PADDLEOCR_VLLM_START_TIMEOUT_SECONDS", "600")
 )
 PADDLE_DPI = shared.DPI
+PADDLE_MAX_RASTER_PIXELS = int(
+    os.environ.get("PADDLEOCR_MAX_RASTER_PIXELS", str(DEFAULT_MAX_RASTER_PIXELS))
+)
+if PADDLE_MAX_RASTER_PIXELS <= 0:
+    raise ValueError("PADDLEOCR_MAX_RASTER_PIXELS must be positive")
 PADDLE_PROCESS_TIMEOUT_SECONDS = 24 * 60 * 60
 PADDLE_PROCESS_IDLE_TIMEOUT_SECONDS = 30 * 60
 PADDLE_PROCESS_TERMINATE_GRACE_SECONDS = 20
@@ -89,10 +103,11 @@ def worker_path() -> Path:
 
 
 def paddle_config() -> dict[str, object]:
-    return {
+    config = {
         "schema": CHECKPOINT_SCHEMA,
         "output_version": OUTPUT_VERSION,
         "dpi": PADDLE_DPI,
+        "max_raster_pixels": PADDLE_MAX_RASTER_PIXELS,
         "device": PADDLE_DEVICE,
         "pipeline_version": PADDLE_PIPELINE_VERSION,
         "layout_model": PADDLE_LAYOUT_MODEL,
@@ -101,6 +116,13 @@ def paddle_config() -> dict[str, object]:
         "max_new_tokens": PADDLE_MAX_NEW_TOKENS,
         "model_source": PADDLE_MODEL_SOURCE,
     }
+    if WINDOWS_NATIVE:
+        config.update({
+            "engine": PADDLE_ENGINE or None,
+            "layout_model_dir": str(PADDLE_LAYOUT_MODEL_DIR.resolve()),
+            "recognition_model_dir": str(PADDLE_RECOGNITION_MODEL_DIR.resolve()),
+        })
+    return config
 
 
 def paddle_config_hash() -> str:
@@ -108,6 +130,8 @@ def paddle_config_hash() -> str:
 
 
 def expected_model_directories() -> list[Path]:
+    if WINDOWS_NATIVE:
+        return [PADDLE_LAYOUT_MODEL_DIR.resolve(), PADDLE_RECOGNITION_MODEL_DIR.resolve()]
     recognition_candidates = (
         PADDLE_MODEL_ROOT / "PaddleOCR-VL-1.6",
         PADDLE_MODEL_ROOT / PADDLE_RECOGNITION_MODEL,
@@ -179,6 +203,34 @@ def paddle_worker_identity() -> dict[str, object]:
     if not lines:
         raise RuntimeError("PaddleOCR worker returned no identity JSON")
     return json.loads(lines[-1])
+
+
+def preflight_windows_native() -> None:
+    if not WINDOWS_NATIVE:
+        return
+    if PADDLE_BACKEND != "native" or PADDLE_ENGINE != "transformers":
+        raise RuntimeError("Windows fallback requires PADDLEOCR_VL_BACKEND=native and PADDLEOCR_ENGINE=transformers")
+    required = [PADDLE_PYTHON, PADDLE_LAYOUT_MODEL_DIR / "model.safetensors",
+                PADDLE_RECOGNITION_MODEL_DIR / "model.safetensors"]
+    required.extend((shared.CJK_REGULAR_FONT, shared.CJK_BOLD_FONT,
+                     shared.LATIN_REGULAR_FONT, shared.LATIN_BOLD_FONT,
+                     shared.LATIN_ITALIC_FONT, shared.GREEK_REGULAR_FONT,
+                     shared.MONO_FONT))
+    missing = [str(path) for path in required if not path.is_file()]
+    if missing:
+        raise RuntimeError("Windows OCR prerequisites missing: " + ", ".join(missing))
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    code = ("import importlib.util, torch; "
+            "assert torch.cuda.is_available(), 'CUDA GPU unavailable'; "
+            "assert importlib.util.find_spec('paddleocr'), 'paddleocr missing'; "
+            "print(torch.cuda.get_device_name(0))")
+    result = subprocess.run([str(PADDLE_PYTHON), "-c", code], capture_output=True,
+                            text=True, timeout=90, check=False)
+    if result.returncode:
+        raise RuntimeError("Windows Transformers GPU preflight failed: " +
+                           (result.stderr.strip() or result.stdout.strip()))
+    log(f"Windows Transformers GPU ready: {result.stdout.strip()}")
 
 
 def vllm_server_identity() -> dict[str, object] | None:
@@ -407,6 +459,8 @@ def worker_command(
         str(raw_dir),
         "--dpi",
         str(PADDLE_DPI),
+        "--max-raster-pixels",
+        str(PADDLE_MAX_RASTER_PIXELS),
         "--device",
         PADDLE_DEVICE,
         "--pipeline-version",
@@ -424,6 +478,11 @@ def worker_command(
     ]
     if server_url:
         command.extend(["--server-url", server_url])
+    if PADDLE_ENGINE:
+        command.extend(["--engine", PADDLE_ENGINE])
+    if WINDOWS_NATIVE:
+        command.extend(["--layout-model-dir", str(PADDLE_LAYOUT_MODEL_DIR)])
+        command.extend(["--recognition-model-dir", str(PADDLE_RECOGNITION_MODEL_DIR)])
     if pages:
         command.extend(["--pages", ",".join(str(page_index + 1) for page_index in pages)])
     if force:
@@ -743,6 +802,9 @@ def write_paddle_qc_report(
                 "json_path": result.get("json_path"),
                 "retry_reason": result.get("retry_reason"),
                 "cell_count": len(result.get("cells") or []),
+                "rasterization": result.get("rasterization"),
+                "invalid_picture_bbox_count": result.get("invalid_picture_bbox_count") or 0,
+                "layout_trace": result.get("layout_trace"),
                 "image_fallback_kind": result.get("image_fallback_kind"),
                 "source_facsimile_large_raster_count": result.get(
                     "source_facsimile_large_raster_count"
@@ -844,6 +906,40 @@ def build_outputs(
                 page_index,
                 {"cells": [], "fallback_text": "", "filtered": False, "image_size": None},
             )
+            source_cells = result.get("cells") or []
+            layout_trace = {
+                "recognized_cell_count": len(source_cells),
+                "source_order_available": bool(source_cells) and all(
+                    isinstance(cell.get("__source_index"), int)
+                    and bool(cell.get("__source_id"))
+                    for cell in source_cells
+                ),
+                "source_picture_cell_count": sum(
+                    cell.get("category") == "Picture" for cell in source_cells
+                ),
+                "recognized_reading_order": [
+                    cell.get("__source_id") for cell in source_cells
+                    if cell.get("__source_id")
+                ],
+                "recognized_source_order": [
+                    cell.get("__source_id")
+                    for cell in sorted(
+                        source_cells,
+                        key=lambda cell: (
+                            cell.get("__source_index")
+                            if isinstance(cell.get("__source_index"), int)
+                            else 0
+                        ),
+                    )
+                    if cell.get("__source_id")
+                ],
+            }
+            layout_trace["reading_order_changed"] = (
+                layout_trace["recognized_reading_order"]
+                != layout_trace["recognized_source_order"]
+                if layout_trace["source_order_available"] else None
+            )
+            result["layout_trace"] = layout_trace
             visual_fallback_path = result.get("image_fallback_path")
             preserve_visual_fallback_text = bool(
                 visual_fallback_path
@@ -858,6 +954,7 @@ def build_outputs(
                 log(f"        Page {page_index + 1}: used source page image fallback")
             else:
                 blocks = shared.blocks_from_page_result(result, page_width, page_height)
+                layout_trace["initial_layout_block_count"] = len(blocks)
                 source_rotation = shared.source_page_text_rotation_degrees(page)
                 if source_rotation:
                     blocks = shared.rotate_blocks_for_source_orientation(
@@ -996,7 +1093,9 @@ def build_outputs(
                 blocks = shared.order_blocks_for_reading(
                     blocks, page_width, page_height
                 )
+                layout_trace["repaired_layout_block_count"] = len(blocks)
                 blocks = shared.prepare_blocks(blocks, page_width, page_height)
+                layout_trace["fitted_layout_block_count"] = len(blocks)
                 blocks, failures = shared.fallback_unfitting_layout_page(
                     pdf_path,
                     page_index,
@@ -1058,6 +1157,10 @@ def build_outputs(
                         "image variant uses a source-page fallback"
                     )
             for block in blocks:
+                if not block.get("source_id"):
+                    block["source_id"] = (
+                        f"p{page_index + 1:04d}-legacy-{int(block.get('order', 0)) + 1:04d}"
+                    )
                 block["page_index"] = page_index
                 block["source_pdf_path"] = str(pdf_path)
                 block["formula_cache_dir"] = str(work_dir / "formula_render_cache")
@@ -1068,6 +1171,19 @@ def build_outputs(
                     block["picture_crop_padding"] = shared.PICTURE_CROP_PADDING
                 category = block["category"]
                 category_counts[category] = category_counts.get(category, 0) + 1
+            layout_trace["final_block_count"] = len(blocks)
+            layout_trace["final_picture_block_count"] = sum(
+                block.get("category") == "Picture" for block in blocks
+            )
+            layout_trace["full_page_image_fallback"] = any(
+                block.get("category") == "ImageFallback" for block in blocks
+            )
+            layout_trace["final_reading_order"] = [
+                block["source_id"] for block in blocks
+            ]
+            source_ids = set(layout_trace["recognized_reading_order"])
+            final_ids = set(layout_trace["final_reading_order"])
+            layout_trace["dropped_source_ids"] = sorted(source_ids - final_ids)
             if any(block.get("category") == "ImageFallback" for block in blocks):
                 image_fallback_pages.append(page_index)
             total_blocks += len(blocks)
@@ -1138,6 +1254,23 @@ def build_outputs(
                 f"        Render image PDF page {current}/{total}"
             ),
         )
+        for page_index, (_width, _height, blocks) in enumerate(image_specs):
+            trace = page_results.get(page_index, {}).get("layout_trace")
+            if trace is None:
+                continue
+            crops = [
+                {
+                    "source_id": block.get("source_id"),
+                    "clip_rect": block.get("picture_crop_clip_rect"),
+                    "image_size": block.get("picture_crop_image_size"),
+                    "cache_hit": block.get("picture_crop_cache_hit"),
+                    "path": block.get("picture_crop_path"),
+                }
+                for block in blocks
+                if block.get("category") == "Picture" and block.get("picture_crop_path")
+            ]
+            trace["rendered_picture_count"] = len(crops)
+            trace["picture_crops"] = crops
         image_validation = shared.scan_pdf_validation(
             output_image_pdf,
             progress_callback=lambda current, total: log(
@@ -1293,5 +1426,6 @@ def batch_runner() -> PdfBatchRunner:
 
 
 def main() -> None:
+    preflight_windows_native()
     ensure_directories()
     batch_runner().run()

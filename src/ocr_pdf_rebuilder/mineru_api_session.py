@@ -227,6 +227,8 @@ class MinerUApiSession:
                 bufsize=0,
                 start_new_session=(os.name == "posix"),
             )
+            from .process_control import attach_windows_job
+            attach_windows_job(process)
         except BaseException:
             self._log_handle.close()
             self._log_handle = None
@@ -321,6 +323,8 @@ class MinerUApiSession:
                         self._shutdown_grace_seconds,
                     )
         finally:
+            from .process_control import close_windows_job
+            close_windows_job(process)
             if log_handle is not None:
                 log_handle.close()
 

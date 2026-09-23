@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import ProxyHandler, build_opener
 import webbrowser
 
-from .process_control import LiveProcessController
+from .process_control import LiveProcessController, attach_windows_job, close_windows_job
 from .signal_cleanup import termination_raises_keyboard_interrupt
 from .task_lock import task_lock_is_held
 
@@ -46,6 +46,9 @@ PIPELINES = {
         "label": "PaddleOCR-VL",
     },
 }
+if os.name == "nt":
+    PIPELINES.pop("mineru")
+    PIPELINES["paddle"]["label"] = "PaddleOCR-VL · Windows Transformers"
 MAX_LOG_CHARS = 400_000
 GUI_TASK_TERMINATE_GRACE_SECONDS = 45.0
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -129,6 +132,7 @@ class GuiController:
             else os.pathsep.join((python_bin_dir, current_path))
         )
         env["PYTHONUNBUFFERED"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
         env["OCR_RUNTIME_ROOT"] = str(DEFAULT_RUNTIME_ROOT)
         return env
 
@@ -517,7 +521,7 @@ class GuiController:
 
     def start(self, pipeline: str = "paddle") -> None:
         with self._lock:
-            if self._process is not None and self._process.poll() is None:
+            if self._process is not None:
                 raise RuntimeError("生成任务已经在运行")
             self._select_pipeline(pipeline)
             inputs = self.list_inputs()
@@ -548,6 +552,7 @@ class GuiController:
                 creationflags=creationflags,
                 start_new_session=(os.name == "posix"),
             )
+            attach_windows_job(process)
             self._process = process
             self._process_group_id = os.getpgid(process.pid) if os.name == "posix" else None
             self._status = "running"
@@ -576,9 +581,11 @@ class GuiController:
                 returncode = -1
             self._reclaim_process(process, "GUI output monitor failed")
         finally:
+            close_windows_job(process)
             process.stdout.close()
 
-        self._reclaim_process(process, "GUI task parent finished")
+        if os.name == "posix":
+            self._reclaim_process(process, "GUI task parent finished")
 
         with self._lock:
             if self._process is process:
@@ -638,6 +645,14 @@ class GuiController:
                     pass
             elif hasattr(signal, "CTRL_BREAK_EVENT"):
                 process.send_signal(signal.CTRL_BREAK_EVENT)
+                def escalate() -> None:
+                    with self._lock:
+                        active = self._process is process
+                    if active:
+                        self._reclaim_process(process, "GUI safe stop deadline reached")
+                timer = threading.Timer(GUI_TASK_TERMINATE_GRACE_SECONDS, escalate)
+                timer.daemon = True
+                timer.start()
             else:
                 process.terminate()
 
@@ -652,7 +667,8 @@ class GuiController:
             exit_cleanup_seconds=1.0,
             process_label="GUI OCR task",
         )
-        if process.poll() is None or controller.posix_process_group_exists(process_group_id):
+        if (process.poll() is None or controller.posix_process_group_exists(process_group_id)
+                or getattr(process, "_ocr_windows_job", None) is not None):
             controller.terminate_process_group(
                 process,
                 process_group_id,
@@ -673,7 +689,7 @@ class GuiController:
             process = self._process
             return {
                 "status": self._status,
-                "running": process is not None and process.poll() is None,
+                "running": process is not None,
                 "pid": process.pid if process is not None and process.poll() is None else None,
                 "returncode": self._returncode,
                 "started_at": self._started_at,

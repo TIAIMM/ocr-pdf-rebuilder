@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import importlib.metadata
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -19,8 +20,10 @@ import fitz
 
 if __package__:
     from .reading_order import order_items_for_reading
+    from .raster_geometry import DEFAULT_MAX_RASTER_PIXELS, bounded_render_dpi
 else:  # The worker is also launched directly by the Paddle subprocess.
     from reading_order import order_items_for_reading
+    from raster_geometry import DEFAULT_MAX_RASTER_PIXELS, bounded_render_dpi
 
 
 SCHEMA = 1
@@ -73,7 +76,10 @@ def atomic_write_json(path: Path, payload: object) -> None:
 
 def package_identity() -> dict[str, object]:
     packages = {}
-    for name in ("paddleocr", "paddlepaddle-gpu", "paddlex", "PyMuPDF", "Pillow"):
+    names = ["paddleocr", "paddlepaddle-gpu", "paddlex", "PyMuPDF", "Pillow"]
+    if os.name == "nt":
+        names.extend(("torch", "transformers"))
+    for name in names:
         try:
             packages[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
@@ -115,7 +121,11 @@ def _normalized_block_bbox(block: object) -> list[float] | None:
         normalized = [float(value) for value in bbox]
     except (TypeError, ValueError):
         return None
-    if normalized[2] <= normalized[0] or normalized[3] <= normalized[1]:
+    if (
+        not all(math.isfinite(value) for value in normalized)
+        or normalized[2] <= normalized[0]
+        or normalized[3] <= normalized[1]
+    ):
         return None
     return normalized
 
@@ -246,15 +256,14 @@ def normalized_page_result(
         image_height,
     )
     cells = []
+    invalid_picture_bbox_count = 0
     for source_order, block in enumerate(raw_blocks):
         if not isinstance(block, dict):
             continue
-        bbox = block.get("block_bbox")
-        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
-            continue
-        try:
-            normalized_bbox = [float(value) for value in bbox]
-        except (TypeError, ValueError):
+        normalized_bbox = _normalized_block_bbox(block)
+        if normalized_bbox is None:
+            if category_for_label(block.get("block_label")) == "Picture":
+                invalid_picture_bbox_count += 1
             continue
         content = str(block.get("block_content") or "").strip()
         category = category_for_label(block.get("block_label"))
@@ -273,7 +282,11 @@ def normalized_page_result(
             "__bbox_units": "image",
             "__paddle_label": str(block.get("block_label") or "text"),
             "__paddle_order": order,
+            "__source_index": source_order,
+            "__source_id": f"p{page_index + 1:04d}-b{source_order + 1:04d}",
         }
+        if block.get("block_id") is not None:
+            cell["__paddle_block_id"] = block["block_id"]
         if block.get("__paddle_bbox_content_repaired"):
             cell["__paddle_bbox_content_repaired"] = True
             cell["__paddle_bbox_content_repair_role"] = block.get(
@@ -281,6 +294,8 @@ def normalized_page_result(
             )
         cells.append(cell)
     cells = order_items_for_reading(cells, image_width, image_height)
+    for reading_order, cell in enumerate(cells):
+        cell["__reading_order"] = reading_order
     markdown = "\n\n".join(
         markdown_fragment_for_cell(
             str(cell.get("category") or "Text"),
@@ -300,6 +315,7 @@ def normalized_page_result(
         "retry_reason": "",
         "paddle_bbox_content_repaired": bool(bbox_content_repairs),
         "paddle_bbox_content_repairs": bbox_content_repairs,
+        "invalid_picture_bbox_count": invalid_picture_bbox_count,
         "image_size": [image_width, image_height],
         "json_path": str(raw_json_path),
         "image_path": None,
@@ -340,6 +356,14 @@ def create_pipeline(args: argparse.Namespace):
     os.environ.setdefault("PADDLE_PDX_MODEL_SOURCE", args.model_source)
     from paddleocr import PaddleOCRVL
 
+    engine_options = {}
+    if args.engine:
+        engine_options["engine"] = args.engine
+    if args.layout_model_dir:
+        engine_options["layout_detection_model_dir"] = str(args.layout_model_dir)
+    if args.recognition_model_dir:
+        engine_options["vl_rec_model_dir"] = str(args.recognition_model_dir)
+
     return PaddleOCRVL(
         pipeline_version=args.pipeline_version,
         layout_detection_model_name=args.layout_model,
@@ -353,6 +377,7 @@ def create_pipeline(args: argparse.Namespace):
         format_block_content=False,
         merge_layout_blocks=True,
         use_queues=False,
+        **engine_options,
     )
 
 
@@ -385,10 +410,23 @@ def run(args: argparse.Namespace) -> int:
         )
         pipeline = create_pipeline(args)
         try:
-            matrix = fitz.Matrix(args.dpi / 72.0, args.dpi / 72.0)
             for page_index in pending:
                 page = document[page_index]
+                rasterization = bounded_render_dpi(
+                    page.rect.width,
+                    page.rect.height,
+                    args.dpi,
+                    args.max_raster_pixels,
+                )
+                dpi = float(rasterization["effective_dpi"])
+                matrix = fitz.Matrix(dpi / 72.0, dpi / 72.0)
                 pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+                actual_pixels = pixmap.width * pixmap.height
+                if actual_pixels > args.max_raster_pixels:
+                    raise RuntimeError(
+                        f"PaddleOCR page {page_index + 1} raster exceeded pixel budget: "
+                        f"{actual_pixels} > {args.max_raster_pixels}"
+                    )
                 image_path = page_image_dir / f"page_{page_index + 1:04d}.png"
                 image_path.parent.mkdir(parents=True, exist_ok=True)
                 pixmap.save(str(image_path))
@@ -416,6 +454,10 @@ def run(args: argparse.Namespace) -> int:
                     image_height=pixmap.height,
                     raw_json_path=raw_json,
                 )
+                normalized["rasterization"] = {
+                    **rasterization,
+                    "actual_pixels": actual_pixels,
+                }
                 atomic_write_json(
                     page_result_dir / f"page_{page_index + 1:04d}.json",
                     normalized,
@@ -438,6 +480,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pages")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dpi", type=int, default=200)
+    parser.add_argument(
+        "--max-raster-pixels", type=int, default=DEFAULT_MAX_RASTER_PIXELS
+    )
     parser.add_argument("--device", default="gpu:0")
     parser.add_argument("--pipeline-version", default="v1.6")
     parser.add_argument("--layout-model", default="PP-DocLayoutV3")
@@ -450,6 +495,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--server-url")
     parser.add_argument("--max-new-tokens", type=int, default=2048)
     parser.add_argument("--model-source", default="ModelScope")
+    parser.add_argument("--engine", choices=("paddle", "transformers"))
+    parser.add_argument("--layout-model-dir", type=Path)
+    parser.add_argument("--recognition-model-dir", type=Path)
     return parser
 
 

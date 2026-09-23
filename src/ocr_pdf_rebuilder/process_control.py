@@ -6,12 +6,32 @@ from collections.abc import Callable
 import codecs
 import os
 from pathlib import Path
+import queue
 import selectors
 import signal
 import subprocess
 import sys
 import threading
 import time
+
+from .windows_process import WindowsJob
+
+
+def attach_windows_job(process: subprocess.Popen[bytes]) -> None:
+    if os.name == "nt":
+        try:
+            process._ocr_windows_job = WindowsJob(process)
+        except BaseException:
+            process.kill()
+            process.wait(timeout=5)
+            raise
+
+
+def close_windows_job(process: subprocess.Popen[bytes]) -> None:
+    job = getattr(process, "_ocr_windows_job", None)
+    if job is not None:
+        job.close()
+        process._ocr_windows_job = None
 
 
 def _format_duration(seconds: float) -> str:
@@ -76,6 +96,15 @@ class LiveProcessController:
         grace_seconds: float,
     ) -> None:
         grace_seconds = max(0.1, float(grace_seconds))
+        job = getattr(process, "_ocr_windows_job", None)
+        if os.name == "nt" and job is not None:
+            self.logger(f"    Terminating {self.process_label} Windows job pid={process.pid}: {reason}")
+            job.terminate()
+            try:
+                process.wait(timeout=min(grace_seconds, 5.0))
+            except subprocess.TimeoutExpired:
+                pass
+            return
         if os.name == "posix" and process_group_id is not None:
             if not self.posix_process_group_exists(process_group_id):
                 try:
@@ -154,19 +183,35 @@ class LiveProcessController:
             process = subprocess.Popen(
                 cmd,
                 cwd=str(cwd),
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=False,
                 bufsize=0,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
                 start_new_session=(os.name == "posix"),
             )
+            attach_windows_job(process)
             process_group_id = os.getpgid(process.pid) if os.name == "posix" else None
             assert process.stdout is not None
             stdout_fd = process.stdout.fileno()
             if os.name == "posix":
                 os.set_blocking(stdout_fd, False)
-            selector = selectors.DefaultSelector()
-            selector.register(process.stdout, selectors.EVENT_READ)
+            selector = selectors.DefaultSelector() if os.name == "posix" else None
+            output_queue: queue.Queue[bytes | None] | None = None
+            if selector is not None:
+                selector.register(process.stdout, selectors.EVENT_READ)
+            else:
+                output_queue = queue.Queue()
+                def read_pipe() -> None:
+                    try:
+                        while chunk := process.stdout.read(65536):
+                            output_queue.put(chunk)
+                    except (OSError, ValueError):
+                        pass
+                    finally:
+                        output_queue.put(None)
+                threading.Thread(target=read_pipe, daemon=True).start()
             decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
             pending = []
             pending_chars = 0
@@ -192,7 +237,11 @@ class LiveProcessController:
                 payload = "".join(pending)
                 if stream_to_console:
                     with self.console_lock:
-                        sys.stdout.write(payload)
+                        try:
+                            sys.stdout.write(payload)
+                        except UnicodeEncodeError:
+                            encoding = sys.stdout.encoding or "utf-8"
+                            sys.stdout.write(payload.encode(encoding, errors="replace").decode(encoding))
                         sys.stdout.flush()
                 handle.write(payload)
                 handle.flush()
@@ -209,6 +258,19 @@ class LiveProcessController:
             def drain_available_output() -> bool:
                 nonlocal last_activity, stdout_open
                 received = False
+                if output_queue is not None:
+                    while stdout_open:
+                        try:
+                            chunk = output_queue.get_nowait()
+                        except queue.Empty:
+                            break
+                        if chunk is None:
+                            stdout_open = False
+                            break
+                        received = True
+                        last_activity = time.monotonic()
+                        append_output(decoder.decode(chunk))
+                    return received
                 while stdout_open:
                     try:
                         chunk = os.read(stdout_fd, 65536)
@@ -275,9 +337,12 @@ class LiveProcessController:
                             flush_pending(force=True)
                             last_heartbeat = now
 
-                    events = selector.select(timeout=0.25) if stdout_open else []
+                    events = selector.select(timeout=0.25) if selector is not None and stdout_open else []
                     if events:
                         drain_available_output()
+                    elif output_queue is not None:
+                        drain_available_output()
+                        time.sleep(0.05)
                     flush_pending()
 
                     if process.poll() is not None:
@@ -314,6 +379,8 @@ class LiveProcessController:
                 raise
             finally:
                 try:
-                    selector.close()
+                    if selector is not None:
+                        selector.close()
                 finally:
+                    close_windows_job(process)
                     process.stdout.close()

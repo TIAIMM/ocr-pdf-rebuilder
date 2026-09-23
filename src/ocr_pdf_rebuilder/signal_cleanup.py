@@ -13,7 +13,7 @@ def termination_raises_keyboard_interrupt():
     def interrupt(_signum, _frame):
         raise KeyboardInterrupt
 
-    for name in ("SIGTERM", "SIGHUP"):
+    for name in ("SIGTERM", "SIGHUP", "SIGBREAK"):
         signum = getattr(signal, name, None)
         if signum is None:
             continue

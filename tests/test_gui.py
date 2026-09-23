@@ -89,10 +89,11 @@ class GuiControllerTests(unittest.TestCase):
             GuiController._default_command()[-1],
             "ocr_pdf_rebuilder.paddle_textonly_pdf",
         )
-        self.assertEqual(
-            GuiController._default_command("mineru")[-1],
-            "ocr_pdf_rebuilder.mineru_pipeline",
-        )
+        if os.name != "nt":
+            self.assertEqual(
+                GuiController._default_command("mineru")[-1],
+                "ocr_pdf_rebuilder.mineru_pipeline",
+            )
         self.assertEqual(
             GuiController._default_command("paddle")[-1],
             "ocr_pdf_rebuilder.paddle_textonly_pdf",

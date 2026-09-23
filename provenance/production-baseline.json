@@ -1,13 +1,13 @@
 {
   "schema": 2,
-  "captured_at": "2026-09-19T07:00:18.410449+00:00",
+  "captured_at": "2026-09-23T09:18:02.278195+00:00",
   "repository_path": "src/ocr_pdf_rebuilder",
   "package_identity": {
     "schema": 1,
     "algorithm": "sha256-canonical-file-manifest-v1",
     "package": "ocr_pdf_rebuilder",
-    "file_count": 29,
-    "files_sha256": "73227e7b573a4923b947e41b15525244b285e4a5c24e486bce2640923e8114be",
+    "file_count": 32,
+    "files_sha256": "81d5c4450630846f50aa870fa2bcef39bfe4d6da25f8f519db428ada7611356d",
     "files": [
       {
         "path": "__init__.py",
@@ -18,6 +18,11 @@
         "path": "batch_runner.py",
         "size": 7139,
         "sha256": "382c7fc90ab5fb47f135d573e3044935cc02c85191219c32e884977f9070bbe9"
+      },
+      {
+        "path": "cli.py",
+        "size": 574,
+        "sha256": "0bab5677a08bd2e525caa48b1a279364598cd40791aa0e0b6f185e2d009ebc43"
       },
       {
         "path": "code_identity.py",
@@ -36,18 +41,18 @@
       },
       {
         "path": "gui.py",
-        "size": 45424,
-        "sha256": "d40a232a0c6ea4c8ceb667710295263a066858f1c90db9a03539892f0a6495fb"
+        "size": 46162,
+        "sha256": "491ccaf50e8f66fdc587b83ebc0c473f986d1ee14173ef8af28c8216823d9dbd"
       },
       {
         "path": "layout_engine.py",
-        "size": 87758,
-        "sha256": "face6268c1d9ce278237c5981c453b8d3910221a13329e4c07aa780183be8215"
+        "size": 88050,
+        "sha256": "f9238e57b5593f4da21e1a10cf3e1be43d8a5829846005ddec339195f75921c4"
       },
       {
         "path": "mineru_api_session.py",
-        "size": 16706,
-        "sha256": "16f137455823adfe3703ed367119516601c4feb20e05c70e59131793b0248792"
+        "size": 16904,
+        "sha256": "0e0bea79cb3ed3e91e55d115d08af7798adbdde6c5868f35624e48b8e0e63a8d"
       },
       {
         "path": "mineru_pipeline.py",
@@ -66,8 +71,8 @@
       },
       {
         "path": "paddle_pipeline.py",
-        "size": 51215,
-        "sha256": "afe509cb20ed515712a90d93a740180c50a900a0355e75589b67b819281cb8ae"
+        "size": 58230,
+        "sha256": "163410811b779b748be7b86cf40ef21f7641a725ef097c1249aa3b5e8c7ed5db"
       },
       {
         "path": "paddle_textonly_pdf.py",
@@ -76,8 +81,8 @@
       },
       {
         "path": "paddle_worker.py",
-        "size": 17336,
-        "sha256": "4602f7a253532ba8f159af78b6787cab8a819619e7055caee294e85160c9856d"
+        "size": 19488,
+        "sha256": "6d2bc4c0e13086575c84e493243ae4a1939daa737a9f61465d59fbfe75f0e697"
       },
       {
         "path": "page_recovery.py",
@@ -106,13 +111,18 @@
       },
       {
         "path": "process_control.py",
-        "size": 11978,
-        "sha256": "debce48ce75ccd43ea27a73414498bb60ceafef3dcbc7997c7f8f7fdea16abd2"
+        "size": 14819,
+        "sha256": "186f9a8457bb586d12c1a78441e689e116dbcc3e2b7828883cda2083c78ea63b"
       },
       {
         "path": "qc_reporting.py",
-        "size": 15304,
-        "sha256": "1efb1e8c7f7a8e0093c583ebb252fee4478cbb4e353acc59cf3eb2b4db446a71"
+        "size": 15959,
+        "sha256": "939d47e3232ac4b9026da13cd5de1785b348edf3311fd3e1f25149c3f89dc16d"
+      },
+      {
+        "path": "raster_geometry.py",
+        "size": 2128,
+        "sha256": "5bf415dfa23ae75ebe7e2b661e7bf560ca9c0c78b86d15b5a70af5c93ce171a2"
       },
       {
         "path": "reading_order.py",
@@ -121,8 +131,8 @@
       },
       {
         "path": "reportlab_renderer.py",
-        "size": 62513,
-        "sha256": "d3f99d5f6f1ccfb53f159f326c02589671b51e58678392635f64affa118ca596"
+        "size": 64886,
+        "sha256": "583b49837213b73d7b5dc3f0e4b1bad4e20a05d73a440bf0157aca9b0940ec50"
       },
       {
         "path": "runtime_state.py",
@@ -141,18 +151,23 @@
       },
       {
         "path": "signal_cleanup.py",
-        "size": 670,
-        "sha256": "6621e4dc787d26532273e40fd9cff4d4b9346124bb68f96706d48341af57aea4"
+        "size": 682,
+        "sha256": "8e216eb4864b5cfbfb1bb42c7c8d7dbc834e29db43f99ad7cc8a2417b15c090a"
       },
       {
         "path": "task_lock.py",
-        "size": 4578,
-        "sha256": "ea42ea701a7e7f65bc7590c8ce02b16f1b1a42b21b8b6965567076ac02cc00be"
+        "size": 4791,
+        "sha256": "c787c7ecabdc1eceff172fd5a4e1bf9f09df865839b282f75f35c43c7b2d24d9"
       },
       {
         "path": "text_processing.py",
         "size": 70108,
         "sha256": "9414529df85fbdf93c498acf8a748ddea81266961c358c966cee2af90c45d3ab"
+      },
+      {
+        "path": "windows_process.py",
+        "size": 3358,
+        "sha256": "d8303a814a51a8c9db5be204213fc8e4b16e7368723e5e2432433e7411ee8084"
       }
     ]
   }

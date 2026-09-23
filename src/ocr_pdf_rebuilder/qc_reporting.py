@@ -92,6 +92,18 @@ def collect_qc_suspect_pages(pdf_path, page_results, page_specs, page_count):
                 issues.append("consecutive_text_overlaps_separated")
             if result.get("layout_fit_failures"):
                 issues.append("layout_block_could_not_fit_bbox")
+            rasterization = result.get("rasterization") or {}
+            if rasterization.get("low_resolution_risk"):
+                issues.append("ocr_raster_below_72_dpi")
+            if result.get("invalid_picture_bbox_count"):
+                issues.append("picture_invalid_source_bbox")
+            layout_trace = result.get("layout_trace") or {}
+            if (
+                layout_trace.get("source_picture_cell_count", 0)
+                > layout_trace.get("rendered_picture_count", 0)
+                and not layout_trace.get("full_page_image_fallback")
+            ):
+                issues.append("picture_not_rendered_in_image_variant")
             if result.get("paddle_bbox_content_repaired"):
                 issues.append("paddle_bbox_content_repaired")
             if result.get("table_disabled_retry"):

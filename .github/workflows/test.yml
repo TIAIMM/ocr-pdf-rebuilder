@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      OCR_RUNTIME_ROOT: ${{ runner.temp }}/ocr-tests
+      OCR_RUNTIME_ROOT: ${{ github.workspace }}/tmp/ci-runtime
       PYTHONPATH: src:tests
     steps:
       - uses: actions/checkout@v4

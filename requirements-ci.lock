@@ -1,4 +1,13 @@
-# Minimal, exact CPU dependencies used by the generated regression tests.
+# Exact CPU dependencies for unittest and pytest regression tests.
 # GitHub Actions installs these with --no-deps.
 Pillow==12.2.0
 PyMuPDF==1.27.2.3
+charset-normalizer==3.4.7
+iniconfig==2.3.1
+markdown-it-py==4.2.0
+mdurl==0.1.2
+packaging==26.2
+pluggy==1.6.0
+Pygments==2.20.0
+pytest==9.1.1
+reportlab==4.5.1

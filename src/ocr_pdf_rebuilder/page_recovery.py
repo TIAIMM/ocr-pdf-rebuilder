@@ -1,6 +1,7 @@
 """Page-level retry, forward-leak repair and safe fallback policy."""
 
 from pathlib import Path
+import os
 import re
 import statistics
 
@@ -649,6 +650,45 @@ def source_auxiliary_color_raster_coverage(page, result):
     return len(rasters), covered, len(rasters) - covered
 
 
+def protect_structural_table_pages(pdf_path, page_results, work_dir):
+    """Keep structured OCR editable while the image companion keeps source layout."""
+    for page_index, result in page_results.items():
+        if result.get("ocr_text_suppressed"):
+            continue
+        tables = [extract_table_rows(source_text_from_cell(cell))
+                  for cell in result.get("cells", [])
+                  if normalize_category(cell.get("category")) == "Table"]
+        tables = [rows for rows in tables if rows and max(r["col_count"] for r in rows) > 1]
+        if not tables:
+            continue
+        path = Path(work_dir) / "table_structure_source_pages" / f"page_{page_index + 1:04d}.png"
+        if not result.get("image_fallback_path"):
+            render_pdf_page_to_png(pdf_path, page_index, path)
+            result["image_fallback_path"] = str(path)
+        result["image_fallback_page"] = True
+        result["image_fallback_kind"] = result.get("image_fallback_kind") or "table_structure"
+        result["structural_source_page_preserved"] = True
+        result["table_column_counts"] = [max(r["col_count"] for r in rows) for rows in tables]
+        preserve_text_for_visual_fallback(result)
+    return page_results
+
+
+def restore_structural_source_pages(source_pdf, image_pdf, page_results):
+    indexes = sorted(i for i, result in page_results.items()
+                     if result.get("structural_source_page_preserved"))
+    if not indexes:
+        return []
+    image_pdf = Path(image_pdf)
+    temporary = image_pdf.with_suffix(".source-pages.tmp")
+    with fitz.open(source_pdf) as source, fitz.open(image_pdf) as output:
+        for i in indexes:
+            output.insert_pdf(source, from_page=i, to_page=i, start_at=i)
+            output.delete_page(i + 1)
+        output.save(temporary, deflate=True, garbage=0)
+    os.replace(temporary, image_pdf)
+    return indexes
+
+
 def preserve_text_for_visual_fallback(result):
     """Keep usable OCR text while the image variant uses a source-page image."""
 
@@ -1103,6 +1143,32 @@ def degrade_complex_layout_pages_to_images(pdf_path, page_results, work_dir):
     return page_results
 
 
+def suppress_page_ocr_text(result):
+    """Apply an image-only fallback to every downstream OCR text channel."""
+    result["suppressed_ocr_cell_count"] = max(
+        result.get("suppressed_ocr_cell_count", 0), len(result.get("cells") or []))
+    result["ocr_text_suppressed"] = True
+    result["cells"] = []
+    result["fallback_text"] = ""
+    result["md_nohf_text"] = ""
+    result["visual_fallback_text_preserved"] = False
+    result["visual_fallback_preserved_cell_count"] = 0
+    result["visual_fallback_preserved_text_chars"] = 0
+
+
+def restore_page_output_text_policy(page_results, qc_report):
+    """Reapply final image-only decisions when rebuilding from raw parser cache."""
+    for page_index, result in page_results.items():
+        record = qc_report.get("page_results", {}).get(str(page_index + 1), {})
+        image_only = (
+            record.get("layout_trace", {}).get("full_page_image_fallback")
+            and not record.get("visual_fallback_text_preserved")
+        )
+        if record.get("ocr_text_suppressed") or image_only:
+            suppress_page_ocr_text(result)
+    return page_results
+
+
 def fallback_unfitting_layout_page(
     pdf_path,
     page_index,
@@ -1124,6 +1190,7 @@ def fallback_unfitting_layout_page(
         / f"page_{page_index + 1:04d}.png"
     )
     render_pdf_page_to_png(pdf_path, page_index, image_path)
+    suppress_page_ocr_text(result)
     result["image_fallback_path"] = str(image_path)
     result["image_fallback_page"] = True
     result["image_fallback_kind"] = "layout_fit"
@@ -1164,9 +1231,7 @@ def fallback_damaged_source_orientation_page(
         image_path,
         rotation_degrees=rotation_degrees,
     )
-    result["cells"] = []
-    result["fallback_text"] = ""
-    result["md_nohf_text"] = ""
+    suppress_page_ocr_text(result)
     result["needs_retry"] = False
     result["image_fallback_path"] = str(image_path)
     result["image_fallback_page"] = True
@@ -1194,6 +1259,8 @@ _COMPONENT_EXPORTS = (
     "picture_block_covers_source_rect",
     "source_auxiliary_color_raster_coverage",
     "preserve_text_for_visual_fallback",
+    "protect_structural_table_pages",
+    "restore_structural_source_pages",
     "degrade_source_facsimile_pages_to_images",
     "normalized_layout_lines",
     "normalized_layout_key",
@@ -1203,6 +1270,8 @@ _COMPONENT_EXPORTS = (
     "source_gap_content_evidence",
     "degrade_complex_layout_pages_to_images",
     "fallback_unfitting_layout_page",
+    "suppress_page_ocr_text",
+    "restore_page_output_text_policy",
     "fallback_damaged_source_orientation_page",
 )
 _COMPONENT_RUNTIME = ComponentRuntime(globals(), _COMPONENT_EXPORTS)

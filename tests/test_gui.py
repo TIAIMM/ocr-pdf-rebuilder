@@ -384,6 +384,75 @@ class GuiControllerTests(unittest.TestCase):
     def test_gui_server_enables_safe_address_reuse(self):
         self.assertTrue(GuiHttpServer.allow_reuse_address)
 
+    def test_workbench_api_requires_backend_token_and_keeps_original_gui(self):
+        controller = self.controller([sys.executable, "-c", "pass"])
+        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(controller, "page-csrf", "workbench-secret"))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        connection = HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+        try:
+            connection.request("GET", "/workbench/v1/health")
+            response = connection.getresponse()
+            response.read()
+            self.assertEqual(response.status, 403)
+            headers = {"Authorization": "Bearer workbench-secret"}
+            connection.request("GET", "/workbench/v1/health", headers=headers)
+            response = connection.getresponse()
+            health = json.loads(response.read())
+            self.assertEqual(response.status, 200)
+            self.assertEqual(health["api_version"], 1)
+            self.assertEqual(health["component"], "ocr")
+            connection.request("GET", "/workbench/v1/operations", headers=headers)
+            response = connection.getresponse()
+            operations = json.loads(response.read())
+            self.assertEqual(set(operations["operations"]), {"status", "log", "start", "stop"})
+            connection.request("POST", "/workbench/v1/start", body='{"pipeline":"paddle"}',
+                               headers={**headers, "Content-Type": "application/json"})
+            response = connection.getresponse()
+            error = json.loads(response.read())
+            self.assertEqual(response.status, 409)
+            self.assertIn("没有 PDF", error["error"])
+            connection.request("GET", "/api/status")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(json.loads(response.read())["status"], "idle")
+        finally:
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+
+    @unittest.skipUnless(os.name == "posix", "safe stop and resume use POSIX process groups")
+    def test_workbench_api_stop_and_restart_with_stub_worker(self):
+        (self.input_dir / "sample.pdf").write_bytes(b"fixture")
+        controller = self.controller([sys.executable, "-u", "-c", "import time;print('ready');time.sleep(60)"])
+        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(controller, "page-csrf", "workbench-secret"))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        connection = HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+        headers = {"Authorization": "Bearer workbench-secret", "Content-Type": "application/json"}
+        try:
+            for expected_run in (1, 2):
+                connection.request("POST", "/workbench/v1/start", body='{"pipeline":"paddle"}', headers=headers)
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 200)
+                self.assertTrue(controller.status()["running"])
+                self.assertEqual(controller.status()["run_id"], expected_run)
+                connection.request("POST", "/workbench/v1/stop", body="{}", headers=headers)
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 200)
+                self.wait_until_finished(controller)
+                self.assertEqual(controller.status()["status"], "interrupted")
+        finally:
+            if controller.status()["running"]:
+                controller.force_stop()
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+
 
 if __name__ == "__main__":
     unittest.main()

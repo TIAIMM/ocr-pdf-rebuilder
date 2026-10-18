@@ -448,6 +448,7 @@ def build_mineru_parser_runs(
                         "start_page": start_page,
                         "end_page": end_page,
                         "label": label,
+                        "reused": True,
                     }
                 ]
 

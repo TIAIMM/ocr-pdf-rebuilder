@@ -384,6 +384,9 @@ def completed_output_state_matches(
     searchable_pdf_path,
 ):
     state = read_checkpoint(state_path)
+    from .manual_corrections import correction_path, manifest_revision
+    if state and state.get('manual_correction_revision') != manifest_revision(correction_path(MINERU_OUTPUT_DIR / pdf_path.stem)):
+        return False
     if (
         not state
         or state.get("schema") != MINERU_CHECKPOINT_SCHEMA
@@ -463,6 +466,7 @@ def write_completed_output_state(
     image_variant_pages=None,
 ):
     image_fallback_pages = sorted(set(int(page) for page in image_fallback_pages))
+    from .manual_corrections import correction_path, manifest_revision
     image_variant_pages = sorted(
         set(image_fallback_pages)
         | set(int(page) for page in (image_variant_pages or []))
@@ -491,6 +495,7 @@ def write_completed_output_state(
             "image_fallback_pages": [int(page_index) + 1 for page_index in image_fallback_pages],
             "image_variant_pages": [int(page_index) + 1 for page_index in image_variant_pages],
             "updated_at": time.time(),
+            "manual_correction_revision": manifest_revision(correction_path(MINERU_OUTPUT_DIR / pdf_path.stem)),
         },
     )
 
@@ -512,7 +517,10 @@ def checkpoint_matches(checkpoint, identity, status=None):
         return False
     if status is not None and checkpoint.get("status") != status:
         return False
-    return all(checkpoint.get(key) == value for key, value in identity.items())
+    # Recognition is bound to source, provider configuration and model runtime.
+    # A new renderer/semantic structure does not invalidate recognized pages.
+    return all(checkpoint.get(key) == value for key, value in identity.items()
+               if key != "implementation_identity_hash")
 
 
 def mineru_output_has_results(output_dir):

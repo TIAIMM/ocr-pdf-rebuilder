@@ -3,6 +3,7 @@
 from pathlib import Path
 import os
 import re
+from .selected_run import run_paths
 
 RUNTIME_ROOT = Path(
     os.environ.get("OCR_RUNTIME_ROOT", Path(__file__).resolve().parents[2])
@@ -13,6 +14,7 @@ MINERU_OUTPUT_DIR = RUNTIME_ROOT / "mineru_output"
 TMP_DIR = RUNTIME_ROOT / "tmp/mineru_textonly_pdf"
 LOG_DIR = RUNTIME_ROOT / "logs_mineru"
 QC_DIR = RUNTIME_ROOT / "qc_mineru"
+OUTPUT_DIR, MINERU_OUTPUT_DIR, TMP_DIR, LOG_DIR, QC_DIR = run_paths(RUNTIME_ROOT, "mineru")
 
 MINERU_COMMAND = "mineru"
 MINERU_API_COMMAND = "mineru-api"
@@ -32,7 +34,7 @@ GREEK_ITALIC_FONT = RUNTIME_ROOT / "fonts/DejaVuSerif-Italic.ttf"
 MONO_FONT = RUNTIME_ROOT / "fonts/NotoSansMono-Regular.ttf"
 
 DPI = 200
-OUTPUT_VERSION = "mineru-reportlab-cell-aware-render-v56-picture-crops"
+OUTPUT_VERSION = "mineru-reportlab-cell-aware-render-v63-escaped-scripts"
 
 # MinerU execution. Leave values as None to keep MinerU's own defaults.
 # When MINERU_API_URL is unset, each document owns one lazy local API process

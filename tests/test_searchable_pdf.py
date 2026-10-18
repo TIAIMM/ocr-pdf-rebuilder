@@ -125,6 +125,38 @@ class SearchablePdfTests(unittest.TestCase):
                 f"page {index + 1} pixels changed",
             )
 
+    def test_replaces_hidden_source_ocr_without_changing_scan(self):
+        with fitz.open() as doc:
+            page = doc.new_page(width=300, height=400)
+            page.insert_image(page.rect, stream=make_scan_image())
+            page.insert_text((40, 70), "Duplicate phrase", render_mode=3)
+            page.draw_line((20, 20), (200, 20))
+            doc.save(self.source)
+        cell = span_cell([40, 50, 260, 90], [
+            ([40, 50, 260, 90], [("Duplicate phrase", [40, 50, 260, 90])])])
+        stats = self.pipeline.build_searchable_pdf(
+            self.source, {0: {"cells": [cell], "image_size": None}}, self.output)
+        self.assertEqual(stats["source_ocr_replaced_pages"], [1])
+        with fitz.open(self.output) as doc:
+            self.assertEqual(doc[0].get_text().count("Duplicate phrase"), 1)
+            self.assertTrue(all(span["type"] != 3 for span in doc[0].get_texttrace()))
+        self.assertEqual(pixmap_digest(self.source, 0), pixmap_digest(self.output, 0))
+
+    def test_preserves_existing_text_when_no_new_ocr_or_native_overlap(self):
+        with fitz.open() as doc:
+            page = doc.new_page(width=300, height=400)
+            page.insert_text((40, 70), "Native text")
+            doc.new_page(width=300, height=400).insert_text((40, 70), "Old OCR", render_mode=3)
+            doc.save(self.source)
+        cell = span_cell([40, 50, 260, 90], [
+            ([40, 50, 260, 90], [("Native text", [40, 50, 260, 90])])])
+        self.pipeline.build_searchable_pdf(
+            self.source, {0: {"cells": [cell], "image_size": None}, 1: {"cells": []}}, self.output)
+        with fitz.open(self.output) as doc:
+            self.assertEqual(doc[0].get_text().count("Native text"), 1)
+            self.assertEqual(doc[1].get_text().count("Old OCR"), 1)
+        self.assertEqual(pixmap_digest(self.source, 0), pixmap_digest(self.output, 0))
+
     def test_word_boxes_stay_inside_source_boxes(self):
         make_scanned_source(self.source, pages=1)
         boxes = {
@@ -180,7 +212,7 @@ class SearchablePdfTests(unittest.TestCase):
             self.assertLessEqual(x1, scaled.x1 + tolerance, word)
             self.assertLessEqual(y1, scaled.y1 + tolerance, word)
 
-    def test_table_and_picture_are_skipped_but_formula_is_searchable(self):
+    def test_table_and_formula_are_searchable_and_picture_is_skipped(self):
         make_scanned_source(self.source, pages=1)
         cells = [
             {
@@ -211,7 +243,7 @@ class SearchablePdfTests(unittest.TestCase):
         stats = self.pipeline.build_searchable_pdf(
             self.source, {0: {"cells": cells, "image_size": None}}, self.output
         )
-        self.assertEqual(stats["skipped_category_cells"], 2)
+        self.assertEqual(stats["skipped_category_cells"], 1)
         self.assertEqual(stats["text_page_indexes"], [0])
         with fitz.open(self.output) as doc:
             text = doc[0].get_text()

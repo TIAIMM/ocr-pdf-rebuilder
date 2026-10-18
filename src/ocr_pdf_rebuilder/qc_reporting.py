@@ -310,6 +310,8 @@ def write_mineru_qc_report(
             "span": None,
         },
         "suspect_pages": suspect_pages,
+        "manual_page_corrections": {str(i + 1): r['manual_correction'] for i, r in page_results.items() if r.get('manual_correction')},
+        "ocr_quality_alerts": {str(i + 1): r['ocr_quality_alerts'] for i, r in page_results.items() if r.get('ocr_quality_alerts')},
         "rendered_debug_pages": {
             "layout": rendered_layout,
             "span": rendered_span,

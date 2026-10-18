@@ -1,6 +1,7 @@
 """Searchable OCR-layer PDF: original scans over ordinary selectable text."""
 
 import hashlib
+import html
 import os
 import re
 import tempfile
@@ -12,7 +13,7 @@ from .component_runtime import ComponentRuntime
 from .pipeline_config import *
 from .reading_order import order_items_for_reading
 
-SEARCHABLE_SKIP_CATEGORIES = frozenset({"Table", "Picture"})
+SEARCHABLE_SKIP_CATEGORIES = frozenset({"Picture"})
 SEARCHABLE_MIN_RECT_POINTS = 1.0
 SEARCHABLE_MIN_FONT_SIZE = 0.1
 SEARCHABLE_VISUAL_SAMPLE_LIMIT = 12
@@ -60,8 +61,8 @@ def _searchable_fit_size(font, text, rect):
     return size
 
 
-def _searchable_place_text(writer, rect, text, fonts):
-    text = _searchable_normalize_text(text).strip()
+def _searchable_place_text(writer, rect, text, fonts, semantic_literal=False):
+    text = str(text).strip() if semantic_literal else _searchable_normalize_text(text).strip()
     if not text:
         return False
     font = fonts["cjk"] if has_cjk(text) else fonts["latin"]
@@ -75,7 +76,8 @@ def _searchable_place_text(writer, rect, text, fonts):
 
 def _searchable_normalize_text(text):
     """Return searchable text without raw Markdown/LaTeX residue."""
-    normalized = normalize_markdown_text(text or "")
+    normalized = normalize_markdown_text(strip_markdown_inline(html.unescape(str(text or ""))))
+    normalized = re.sub(r"(?is)</?(?:sup|sub|span|small|font|strong|em|b|i|u|mark|del|s|code|p|div|br)(?:\s+[^<>]*)?\s*/?>", "", normalized)
     if LATEX_RESIDUE_RE.search(normalized) or contains_latex_fallback_command(normalized):
         normalized = normalize_markdown_text(linearize_latex_formula(normalized))
     return normalized
@@ -122,12 +124,41 @@ def _searchable_block_fallback_rects(block):
 
 
 def _searchable_block_placements(block, page_rect):
+    if block.get('manual_editorial_note'):
+        return []
+    if block.get("semantic"):
+        from .semantic_render import placements
+        return [(rect, text) for box, text in placements(block["semantic"])
+                if (rect := _searchable_clamp_rect(box, page_rect)) and text.strip()]
     if str(block.get("category") or "Text") == "Formula":
         # Formula cells rarely carry trustworthy line/span boxes.  Use their
         # complete source bbox and the linearized search string so every
         # rendered formula remains findable without leaking TeX markup.
         return _searchable_block_fallback_rects(block)
 
+    if block.get("category") == "Table":
+        rows = table_rows_for_block(block)
+        if rows:
+            rect = fitz.Rect(block["left"], block["top"], block["left"] + block["width"], block["top"] + block["height"])
+            weights = table_column_weights(rows)
+            widths = [rect.width * weight / sum(weights) for weight in weights]
+            placements = []
+            for row_index, row in enumerate(rows):
+                specs = row.get("cell_specs") or [{"col": col, "text": text, "colspan": 1, "rowspan": 1}
+                                                  for col, text in enumerate(row.get("cells", []))]
+                for cell in specs:
+                    left = rect.x0 + sum(widths[:cell["col"]])
+                    top = rect.y0 + rect.height * row_index / len(rows)
+                    box = fitz.Rect(left, top, left + sum(widths[cell["col"]:cell["col"] + cell.get("colspan", 1)]),
+                                    top + rect.height * cell.get("rowspan", 1) / len(rows))
+                    box = _searchable_clamp_rect(box, page_rect)
+                    if box and cell["text"].strip():
+                        lines = _searchable_normalize_text(cell["text"]).splitlines()
+                        for line_index, line in enumerate(lines):
+                            line_box = fitz.Rect(box.x0, box.y0 + box.height * line_index / len(lines),
+                                                 box.x1, box.y0 + box.height * (line_index + 1) / len(lines))
+                            placements.append((line_box, line))
+            return placements
     scale_x = block.get("bbox_scale_x", 1.0)
     scale_y = block.get("bbox_scale_y", 1.0)
     placements = []
@@ -172,10 +203,12 @@ def _searchable_block_placements(block, page_rect):
 
 
 def _searchable_page_placements(page, result):
+    if result.get("ocr_text_suppressed"):
+        return [], 0
     page_rect = page.rect
-    blocks = []
+    blocks = list(result.get("accepted_blocks") or [])
     skipped = 0
-    for order, cell in enumerate(result.get("cells") or []):
+    for order, cell in enumerate([] if "accepted_blocks" in result else result.get("cells") or []):
         block = cell_to_block(
             cell,
             order,
@@ -200,6 +233,30 @@ def _searchable_page_placements(page, result):
     return placements, skipped
 
 
+def _replace_existing_ocr_text(page, placements):
+    """Replace invisible source OCR while retaining native visible content."""
+    traces = page.get_texttrace()
+    hidden = [fitz.Rect(span["bbox"]) for span in traces if span["type"] == 3]
+    visible = [fitz.Rect(span["bbox"]) for span in traces if span["type"] != 3]
+    if not hidden and not visible:
+        return placements, False
+    if hidden and not visible:
+        # Text-only redaction leaves original image objects and vector graphics intact.
+        page.add_redact_annot(page.rect, fill=False, cross_out=False)
+        page.apply_redactions(images=0, graphics=0, text=0)
+        return placements, True
+    removable = [rect for rect in hidden if not any(rect.intersects(v) for v in visible)]
+    for rect in removable:
+        page.add_redact_annot(rect, fill=False, cross_out=False)
+    if removable:
+        page.apply_redactions(images=0, graphics=0, text=0)
+    # Native visible text (and hidden text sharing its geometry) already supplies
+    # this region. OCR is still added to separate scanned regions on mixed pages.
+    remaining = [fitz.Rect(span["bbox"]) for span in page.get_texttrace()]
+    return [(rect, text) for rect, text in placements
+            if not any(rect.intersects(existing) for existing in remaining)], bool(removable)
+
+
 def build_searchable_pdf(source_pdf_path, page_results, output_pdf_path, progress_callback=None):
     source_pdf_path = Path(source_pdf_path)
     output_pdf_path = Path(output_pdf_path)
@@ -211,6 +268,7 @@ def build_searchable_pdf(source_pdf_path, page_results, output_pdf_path, progres
         "text_page_indexes": [],
         "pages_without_text": [],
         "skipped_category_cells": 0,
+        "source_ocr_replaced_pages": [],
     }
     with fitz.open(source_pdf_path) as doc:
         stats["pages"] = doc.page_count
@@ -223,9 +281,12 @@ def build_searchable_pdf(source_pdf_path, page_results, output_pdf_path, progres
                 placements, skipped = _searchable_page_placements(page, result)
                 stats["skipped_category_cells"] += skipped
                 if placements:
+                    placements, replaced = _replace_existing_ocr_text(page, placements)
+                    if replaced:
+                        stats["source_ocr_replaced_pages"].append(page_index + 1)
                     writer = fitz.TextWriter(page.rect)
                     for rect, text in placements:
-                        if _searchable_place_text(writer, rect, text, fonts):
+                        if _searchable_place_text(writer, rect, text, fonts, semantic_literal=bool(result.get('document_page'))):
                             placed += 1
                     if placed:
                         # WPS indexes render-mode 3 text but does not reliably expose it

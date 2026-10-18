@@ -11,6 +11,9 @@ jobs:
   unit:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      OCR_RUNTIME_ROOT: ${{ runner.temp }}/ocr-tests
+      PYTHONPATH: src:tests
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,5 +25,10 @@ jobs:
         run: python -m pip install --no-deps --requirement requirements-ci.lock
       - name: Compile sources
         run: python -m compileall -q src tests
+      - name: Provision CPU test fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-droid-fallback fonts-dejavu-core fonts-dejavu-extra
+          python scripts/provision-test-fonts.py "$OCR_RUNTIME_ROOT"
       - name: Run regression tests
-        run: python -m unittest discover -s tests -v
+        run: python -m pytest tests -q

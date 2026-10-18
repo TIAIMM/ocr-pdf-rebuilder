@@ -16,6 +16,11 @@ from ocr_pdf_rebuilder import pipeline_runtime as pipeline
 
 
 class LatexHardeningTests(unittest.TestCase):
+    def test_indexed_polish_name_uses_explicit_alternate_spelling(self):
+        for source in [r'Da\_{b}rowski [Dombrowski]', 'Da_{b}rowski [Dombrowski]']:
+            self.assertEqual(pipeline.normalize_safe_latex_markup(source),'Dąbrowski [Dombrowski]')
+        self.assertEqual(pipeline.normalize_safe_latex_markup('Da_{b}rowski'),'Da_{b}rowski')
+
     def test_markdown_preserves_inline_and_display_latex(self):
         source = r"正文 $x_{i}=\frac{1}{2}$ 继续。\n\n$$W\_G\_W$$"
         markdown = pipeline.normalize_markdown_latex_text(source)

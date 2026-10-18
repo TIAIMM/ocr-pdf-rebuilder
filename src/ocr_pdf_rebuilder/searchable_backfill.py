@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import fitz
@@ -15,11 +16,14 @@ from .task_lock import CrossProcessTaskLock
 def backfill(source: Path, runtime_root: Path, output: Path | None = None) -> Path:
     source = source.expanduser().resolve()
     runtime_root = runtime_root.expanduser().resolve()
-    output = (output or runtime_root / "pdf_paddle" / f"{source.stem}_paddle_searchable.pdf").resolve()
+    configured = runtime_root == paddle.RUNTIME_ROOT.resolve()
+    output_root = paddle.OUTPUT_DIR if configured else runtime_root / "pdf_paddle"
+    output = (output or output_root / f"{source.stem}_paddle_searchable.pdf").resolve()
     if output == source:
         raise RuntimeError("Searchable output must not replace the source PDF")
-    state_path = runtime_root / "tmp/paddle_textonly_pdf" / source.stem / "job_state.json"
-    raw_dir = runtime_root / "paddle_output" / source.stem
+    state_path = (paddle.TMP_DIR if configured else runtime_root / "tmp/paddle_textonly_pdf") / source.stem / "job_state.json"
+    raw_dir = (paddle.PADDLE_OUTPUT_DIR if configured else runtime_root / "paddle_output") / source.stem
+    qc_path = (paddle.LOG_DIR if configured else runtime_root / "logs_paddle") / f"{source.stem}_qc.json"
     with CrossProcessTaskLock(
         runtime_root / "tmp/ocr_pdf_rebuilder/task.lock",
         engine_name="Paddle searchable backfill", input_dir=source.parent,
@@ -42,6 +46,9 @@ def backfill(source: Path, runtime_root: Path, output: Path | None = None) -> Pa
             raise RuntimeError("OCR cache contains unexpected engine results")
         paddle.log(f"Backfill searchable PDF from {count} cached OCR pages; no model startup")
         paddle.shared.suppress_blank_page_outputs(source, results)
+        if qc_path.exists():
+            paddle.shared.restore_page_output_text_policy(
+                results, json.loads(qc_path.read_text(encoding="utf-8")))
         stats = paddle.shared.build_validated_searchable_pdf(source, results, output)
         # This certifies only the new overlay, never upgrades older reconstructed PDFs.
         paddle.shared.write_checkpoint(output.with_suffix(".version"), {

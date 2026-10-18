@@ -2,7 +2,10 @@
 
 from difflib import SequenceMatcher
 import math
+import html as html_lib
 import re
+import sys
+from . import document_ir as _document_ir
 
 import fitz
 
@@ -65,7 +68,7 @@ def cell_to_block(
     right = max(left + 1.0, min(x1 * scale_x, page_width))
     bottom = max(top + 1.0, min(y1 * scale_y, page_height))
 
-    return {
+    block = {
         "order": order,
         "category": category,
         "text": text,
@@ -81,11 +84,15 @@ def cell_to_block(
         "line_info": cell.get("__line_info") or [],
         "bbox_scale_x": scale_x,
         "bbox_scale_y": scale_y,
+        "manual_editorial_note": bool(cell.get('__manual_editorial_note')),
+        "manual_correction_evidence": cell.get('__manual_correction_evidence'),
         "left": left,
         "top": top,
         "width": right - left,
         "height": bottom - top,
     }
+    _document_ir.ensure_structure(block, sys.modules[__name__])
+    return block
 
 
 def fallback_text_block(text, order, page_width, page_height):
@@ -131,6 +138,9 @@ def blocks_from_page_result(result, page_width, page_height):
         block = cell_to_block(cell, order, page_width, page_height, result.get("image_size"))
         if block:
             blocks.append(block)
+    if result.get('manual_correction'):
+        for block in blocks:
+            block['structural_source_page_preserved']=True
     return order_blocks_for_reading(blocks, page_width, page_height)
 
 
@@ -169,7 +179,8 @@ def image_variant_page_indexes(page_specs):
     return [
         page_index
         for page_index, (_page_width, _page_height, blocks) in enumerate(page_specs)
-        if any(block.get("category") in {"ImageFallback", "Picture"} for block in blocks)
+        if any(block.get("category") in {"ImageFallback", "Picture"}
+               or block.get("structural_source_page_preserved") for block in blocks)
     ]
 
 
@@ -189,7 +200,7 @@ def image_variant_page_indexes_from_results(page_results):
     return sorted(
         int(page_index)
         for page_index, result in (page_results or {}).items()
-        if result.get("image_fallback_path")
+        if result.get("image_fallback_path") or result.get("structural_source_page_preserved")
         or any(
             normalize_category(cell.get("category")) == "Picture"
             and has_valid_picture_bbox(cell)
@@ -275,61 +286,7 @@ def has_cjk(text):
 
 
 def inline_markdown_segments(text):
-    text = normalize_inline_markup_aliases(text)
-    segments = []
-    i = 0
-    patterns = [
-        ("math", "$$", "$$"),
-        ("math", "\\(", "\\)"),
-        ("math", "\\[", "\\]"),
-        ("strongitalic", "***", "***"),
-        ("strongitalic", "___", "___"),
-        ("strong", "**", "**"),
-        ("strong", "__", "__"),
-        ("strike", "~~", "~~"),
-        ("mark", "==", "=="),
-        ("code", "`", "`"),
-        ("math", "$", "$"),
-        ("sub", "~", "~"),
-        ("sup", "^", "^"),
-        ("italic", "*", "*"),
-        ("italic", "_", "_"),
-    ]
-
-    while i < len(text):
-        matched = False
-        for style, start, end in patterns:
-            if not text.startswith(start, i):
-                continue
-            if style in {"italic"}:
-                if text.startswith(start * 2, i):
-                    continue
-            j = text.find(end, i + len(start))
-            if j <= i + len(start):
-                continue
-            inner = text[i + len(start):j]
-            if "\n" in inner:
-                continue
-            if inner.strip():
-                if style == "math" and start == "$" and not is_likely_math_text(inner):
-                    continue
-                segments.append({"text": inner, "style": style})
-                i = j + len(end)
-                matched = True
-                break
-        if matched:
-            continue
-
-        next_positions = [
-            pos for marker in ("$$", "\\(", "\\[", "***", "___", "**", "__", "~~", "==", "`", "$", "~", "^", "*", "_")
-            for pos in [text.find(marker, i + 1)]
-            if pos != -1
-        ]
-        next_i = min(next_positions) if next_positions else len(text)
-        segments.append({"text": text[i:next_i], "style": "normal"})
-        i = next_i
-
-    return [seg for seg in segments if seg["text"]]
+    return _document_ir.legacy_segments(text)
 
 
 def markdown_line_to_segments(line):
@@ -2161,6 +2118,15 @@ def prepare_blocks(blocks, page_width, page_height):
     dense_note_font_size = dense_numbered_note_page_font_size(blocks, page_height)
     prepared = []
     for block in blocks:
+        evidence = block.get('manual_correction_evidence') or {}
+        if evidence.get('text_origin') == 'edition-reference' and block['category'] == 'Text':
+            # Edition reference paragraphs have no source line spacing to preserve.
+            # Fit readable paragraphs by font size, without compressing the leading.
+            block.update(font_size=11.0, min_font_size=5.2, line_height=1.25,
+                         enforce_body_font_floor=False, manual_reference_layout=True)
+            fit_block_to_bbox(block, page_height)
+            prepared.append(block)
+            continue
         numbered_layout_text = numbered_layout_text_number(block) is not None
         if numbered_layout_text:
             # OCR bboxes already encode the item's horizontal placement. The
@@ -2223,6 +2189,18 @@ def table_block_to_markdown(block):
     if not rows:
         return normalize_markdown_latex_text(block["text"])
 
+    if any(cell.get("rowspan", 1) > 1 or cell.get("colspan", 1) > 1
+           for row in rows for cell in row.get("cell_specs", [])):
+        lines = ["<table>"]
+        for row in rows:
+            cells = []
+            for cell in row.get("cell_specs", []):
+                tag = "th" if cell.get("header") else "td"
+                attrs = "".join(f' {key}="{cell[key]}"' for key in ("rowspan", "colspan") if cell.get(key, 1) > 1)
+                cells.append(f"<{tag}{attrs}>" + html_lib.escape(cell["text"]).replace("\n", "<br>") + f"</{tag}>")
+            lines.append("<tr>" + "".join(cells) + "</tr>")
+        return "\n".join([*lines, "</table>"])
+
     if is_toc_table(rows):
         lines = []
         for row in rows:
@@ -2242,7 +2220,7 @@ def table_block_to_markdown(block):
     max_cols = 0
     for row in rows:
         cells = row.get("cells") or row.get("nonempty_cells") or []
-        cells = [normalize_markdown_latex_text(cell) for cell in cells]
+        cells = [normalize_markdown_latex_text(cell).replace("|", "\\|").replace("\n", "<br>") for cell in cells]
         if any(cells):
             normalized_rows.append(cells)
             max_cols = max(max_cols, len(cells))
@@ -2295,6 +2273,13 @@ def blocks_to_markdown_page(blocks, page_index):
 
 
 def markdown_page_from_result(result, blocks, page_index):
+    if result.get("document_page") is not None:
+        return _document_ir.page_markdown(result["document_page"])
+    if result.get("ocr_text_suppressed") or (
+        any(block.get("category") == "ImageFallback" for block in blocks)
+        and not result.get("visual_fallback_text_preserved")
+    ):
+        return f"[PDF 第 {page_index + 1} 页：保留原图，本页 OCR 文字未采用。]"
     md_nohf_text = normalize_markdown_latex_text(result.get("md_nohf_text", ""))
     page_width = max(
         (
@@ -2303,7 +2288,7 @@ def markdown_page_from_result(result, blocks, page_index):
         ),
         default=1.0,
     )
-    if md_nohf_text and not has_clear_column_layout(blocks, page_width):
+    if md_nohf_text and not any(b.get("category") == "Table" for b in blocks) and not has_clear_column_layout(blocks, page_width):
         return md_nohf_text
     return blocks_to_markdown_page(blocks, page_index)
 

@@ -779,6 +779,10 @@ def latex_scripts_to_unicode(text):
 def replace_ocr_latex_hallucinations(text):
     """Repair high-confidence model encodings whose literal TeX is incorrect."""
     text = str(text or "")
+    # The Polish ogonek in this indexed name is misread as a subscript.
+    # Require the source's explicit alternate spelling; arbitrary Da_{b}
+    # expressions remain mathematical scripts.
+    text = re.sub(r"(?<![A-Za-z])Da\\?_\{b\}rowski(?=\s*\[Dombrowski\])", "Dąbrowski", text)
     # In Greek scholarly entries Paddle substitutes commands for the omitted
     # initial alpha with psili/oxia. Keep this contextual so genuine mathring
     # and checkmark commands elsewhere retain their normal meaning.
@@ -1763,36 +1767,28 @@ def source_text_from_cell(cell):
 
 
 def extract_html_table_rows(text):
-    if not re.search(r"(?is)<\s*(table|tr|td|th)\b", text or ""):
-        return []
+    from .document_ir import parse_table_rows
+    return parse_table_rows(text or "", normalize_markdown_latex_text, LATEX_FALLBACK_COMMANDS)
 
-    rows = []
-    for row_match in re.finditer(r"(?is)<tr\b[^>]*>(.*?)</tr\s*>", text):
-        row_html = row_match.group(1)
-        cells = []
-        for cell_match in re.finditer(r"(?is)<t[dh]\b[^>]*>(.*?)</t[dh]\s*>", row_html):
-            cell = strip_html_tags(cell_match.group(1))
-            cell = re.sub(r"[ \t\r\f\v]+", " ", cell).strip()
-            cells.append(normalize_markdown_latex_text(cell) if cell else "")
-        if not cells:
-            continue
-        nonempty = [cell for cell in cells if cell]
-        if not nonempty:
-            continue
-        first_col = next((idx for idx, cell in enumerate(cells) if cell), 0)
-        rows.append(
-            {
-                "cells": cells,
-                "nonempty_cells": nonempty,
-                "first_col": first_col,
-                "col_count": len(cells),
-                "source": "html",
-            }
-        )
-    return rows
+
+def table_column_weights(rows):
+    count = max((row.get("col_count", len(row.get("cells", []))) for row in rows), default=1)
+    weights = [2.0] * count
+    for row in rows:
+        specs = row.get("cell_specs") or [
+            {"col": i, "colspan": 1, "text": cell} for i, cell in enumerate(row.get("cells", []))]
+        for spec in specs:
+            span = spec.get("colspan", 1)
+            weight = max(4, max((len(line) for line in spec["text"].splitlines()), default=0)) ** 0.5 / span
+            for col in range(spec["col"], spec["col"] + span):
+                weights[col] = max(weights[col], weight)
+    return weights
 
 
 def extract_plain_table_rows(text):
+    from .document_ir import parse_markdown_table_rows
+    structured=parse_markdown_table_rows(text,normalize_markdown_latex_text)
+    if structured: return structured
     text = normalize_markdown_latex_text(text)
     rows = []
     for line in re.split(r"\n+", text):
@@ -1830,6 +1826,17 @@ def table_rows_from_text(text):
 
 
 def table_rows_for_block(block_or_text):
+    if isinstance(block_or_text, dict) and block_or_text.get("semantic", {}).get("table"):
+        result=[]
+        for row in block_or_text["semantic"]["table"]:
+            cells=[""]*row["column_count"]
+            specs=[]
+            for cell in row["cells"]:
+                cells[cell["col"]]=cell["text"]
+                specs.append({**cell, "semantic_lines":cell["lines"]})
+            result.append({"cells":cells,"cell_specs":specs,"col_count":len(cells),
+                           "nonempty_cells":[c for c in cells if c],"first_col":next((i for i,c in enumerate(cells) if c),0)})
+        return result
     if isinstance(block_or_text, dict):
         rows = block_or_text.get("table_rows") or extract_table_rows(block_or_text.get("source_text") or block_or_text.get("text", ""))
         return rows
@@ -1866,7 +1873,9 @@ def is_page_number_like(text):
 
 
 def is_toc_table(rows):
-    if len(rows) < 2:
+    if len(rows) < 2 or max((r.get("col_count", 0) for r in rows), default=0) != 2:
+        return False
+    if any(c.get("rowspan", 1) > 1 or c.get("colspan", 1) > 1 for r in rows for c in r.get("cell_specs", [])):
         return False
     page_like = 0
     usable = 0
@@ -1973,6 +1982,7 @@ _COMPONENT_EXPORTS = (
     "strip_latex_math_delimiters",
     "translate_script_text",
     "latex_scripts_to_unicode",
+    "replace_ocr_latex_hallucinations",
     "replace_latex_symbols",
     "unwrap_latex_text_commands",
     "latex_grouped_number_to_superscript",
@@ -2008,6 +2018,7 @@ _COMPONENT_EXPORTS = (
     "markdown_table_cells",
     "source_text_from_cell",
     "extract_html_table_rows",
+    "table_column_weights",
     "extract_plain_table_rows",
     "extract_table_rows",
     "table_rows_from_text",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -15,7 +16,8 @@ class ContentRecoveryTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.pipeline = load_pipeline(self.root)
-        font_root = Path(__file__).resolve().parents[1] / "fonts"
+        runtime_root = Path(os.environ.get("OCR_RUNTIME_ROOT", Path(__file__).resolve().parents[1]))
+        font_root = runtime_root / "fonts"
         for attribute, filename in {
             "CJK_REGULAR_FONT": "SourceHanSerifCN-Regular.ttf",
             "CJK_MEDIUM_FONT": "SourceHanSerifCN-Medium.ttf",
@@ -156,7 +158,7 @@ class ContentRecoveryTests(unittest.TestCase):
         )
         with fitz.open(output) as document:
             page = document[0]
-            self.assertIn(text, page.get_text().replace("\n", " "))
+            self.assertIn(text, " ".join(page.get_text().split()))
             self.assertFalse(page.get_images(full=True))
 
     def test_tiny_numbered_source_line_keeps_its_bbox_indent_and_one_line(self):
@@ -313,6 +315,22 @@ class ContentRecoveryTests(unittest.TestCase):
             self.pipeline.UNFITTING_LAYOUT_IMAGE_FALLBACK_REASON,
             result["retry_reason"],
         )
+
+    def test_cached_image_only_policy_overrides_raw_ocr_but_preserves_visual_text(self):
+        results = {0: {"cells": [{"text": "Rejected text"}], "md_nohf_text": "Rejected text"},
+                   1: {"cells": [{"text": "Preserved text"}]}}
+        qc = {"page_results": {
+            "1": {"layout_trace": {"full_page_image_fallback": True},
+                  "visual_fallback_text_preserved": False},
+            "2": {"layout_trace": {"full_page_image_fallback": True},
+                  "visual_fallback_text_preserved": True}}}
+        self.pipeline.restore_page_output_text_policy(results, qc)
+        self.assertEqual(results[0]["cells"], [])
+        self.assertEqual(results[0]["md_nohf_text"], "")
+        self.assertTrue(results[0]["ocr_text_suppressed"])
+        self.assertEqual(results[1]["cells"][0]["text"], "Preserved text")
+        self.pipeline.restore_page_output_text_policy(results, qc)
+        self.assertEqual(results[0]["suppressed_ocr_cell_count"], 1)
 
 
 if __name__ == "__main__":

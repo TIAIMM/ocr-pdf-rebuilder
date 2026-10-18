@@ -17,8 +17,48 @@ searchable variant that keeps the original scans:
 - a text-only PDF in which handwriting, unusable scans and full-page-image
   fallback pages remain blank;
 - an image variant in which those pages contain their source-page images;
-- a searchable PDF that overlays an invisible OCR text layer (PDF render
-  mode 3) on the original scanned pages, leaving every pixel unchanged.
+- a searchable PDF with one selectable OCR layer underneath the original scans
+  and opaque paper layer (PDF render mode 0), replacing old invisible OCR where
+  new OCR is used and retaining native visible text.
+
+An image-only fallback suppresses that page's new OCR in every text output,
+including Markdown and the searchable PDF. Markdown records the physical PDF
+page and states that its OCR was not used. The image companion keeps the source
+page; the searchable companion keeps the original page and its existing text,
+without adding rejected OCR. A visual fallback that explicitly preserves text
+continues to emit OCR in the text PDF, Markdown and searchable companion.
+Cache-only searchable rebuilding reapplies the final QC decisions so raw parser
+results cannot reintroduce rejected text. Raw recognition caches remain intact.
+
+HTML tables retain columns and merged cells in the text PDF and Markdown.
+Both providers also emit a versioned `document-ir.json` inside their existing
+hidden state/cache directory. Accepted blocks, semantic lines and inline runs
+are shared by PDF reconstruction, Markdown and the searchable layer. HTML and
+CommonMark parsing preserves nested styles, explicit breaks, note references,
+merged cells and evidenced indentation. Ordinary soft wraps can flow within a
+block; uncertain line geometry is recorded and never reconstructed from old OCR.
+Complete source/configuration/model-bound recognition caches remain reusable
+when the output structure or renderer changes, without starting inference.
+
+Explicit page corrections live in `manual-corrections/<input-stem>.json`
+beside the per-document raw job folders. They bind to the source filename,
+size and modification time and survive recognition-cache cleanup. Both
+providers apply them after recovery and share their accepted text across all
+outputs. A changed correction revision rebuilds products without changing
+raw model results. Edition-reference text records its printed source pages
+and keeps the manuscript scan in the image and searchable variants; it is
+not a diplomatic transcription and has only block-level search positions.
+The text PDF and Markdown display that distinction. Editorial notes are
+excluded from the search layer. A manuscript caption accompanied by the
+standard English pangram raises a review alert, never an automatic deletion.
+Tables that cannot fit their page are no longer flattened into running text.
+The image companion preserves structural table pages from the original PDF;
+the searchable companion indexes individual table cells and removes HTML and
+Markdown formatting markers from its selectable text.
+
+Default products are published directly in `pdf_paddle` or `pdf_mineru` under
+`OCR_RUNTIME_ROOT`; selected tasks keep their manifests, caches and logs in
+`.ocr-state` beneath the product directory rather than separate product `runs`.
 
 Runtime directories now live directly under this repository. Books, generated
 PDFs, fonts, logs, checkpoints and QC renders are excluded by `.gitignore`; they
@@ -113,15 +153,25 @@ during environment provisioning, then rerun the read-only preflight.
 
 ## Tests
 
-Run the CPU regression suite inside the existing MinerU environment:
+Run the CPU regression suite in a separate test environment. Pytest collects
+both the unittest classes and the semantic/layout function tests:
 
 From the repository root:
 
 ```bash
-${OCR_PYTHON:-python3} -m unittest discover -s tests -v
+python3 -m venv .venv-tests
+.venv-tests/bin/python -m pip install --no-deps -r requirements-ci.lock
+PYTHONPATH=src:tests OCR_RUNTIME_ROOT="$PWD" \
+  .venv-tests/bin/python -m pytest tests -q
 ```
 
 The suite uses generated temporary files and does not read production books.
+If production fonts are not provisioned, Ubuntu CPU runners can install
+`fonts-droid-fallback`, `fonts-dejavu-core` and `fonts-dejavu-extra`, then use
+`scripts/provision-test-fonts.py <temporary-runtime>` and set
+`OCR_RUNTIME_ROOT` to that directory. These substitute fonts exercise behavior;
+they do not certify production typography. CI follows this isolated setup and
+does not install inference models or start a GPU worker.
 
 Before committing, audit the exact staged set:
 
@@ -246,6 +296,18 @@ The normal CLI entry point `ocr-pdf-rebuilder` uses the same WSL Paddle route;
 or `pdf_mineru/`. Paddle emits Markdown, a text-only PDF, a source-preserving
 searchable PDF and, when needed, a PDF with source pictures. Only one GPU
 inference batch should run at a time.
+
+Reflowed products omit marginal line counters when a repeated five-step sequence
+and outer-column geometry identify them. Their text, positions and exclusion
+reason remain in the document structure; they are not reconstructed from the
+source PDF's old text layer or used as body-line anchors. Body numbers, table
+cells and page footers are retained. Pages with several independent speaker
+labels and body-column boxes keep the two columns separate. Matching duplicated
+label fragments are removed from the accepted body text while raw OCR is kept.
+The image variant uses the source appearance with the same accepted search text;
+the text-only variant reflows within the repaired columns and does not promise
+the original line breaks. Evidence insufficient for column recovery leaves the
+accepted text unchanged.
 
 The Windows-native code is dormant. To use it later, first create a separate
 Windows checkout, install its environment with `scripts\setup-windows.ps1`,

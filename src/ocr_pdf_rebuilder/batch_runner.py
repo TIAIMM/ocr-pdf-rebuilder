@@ -8,6 +8,7 @@ import time
 import traceback
 
 from .task_lock import CrossProcessTaskLock, TaskLockBusyError
+from .selected_run import selected_manifest
 
 
 class PdfBatchRunner:
@@ -25,6 +26,8 @@ class PdfBatchRunner:
         raw_label: str = "Raw",
         log_suffix: str = "mineru",
         lock_path: Path | None = None,
+        input_files: list[Path] | None = None,
+        external_run_id: str | None = None,
     ) -> None:
         self.input_dir = input_dir
         self.output_dir = output_dir
@@ -36,6 +39,9 @@ class PdfBatchRunner:
         self.engine_name = engine_name
         self.raw_label = raw_label
         self.log_suffix = log_suffix
+        selected = selected_manifest() if input_files is None else None
+        self.input_files = ([Path(p) for p in selected["input_files"]] if selected else input_files)
+        self.external_run_id = selected["run_id"] if selected else external_run_id
         self.lock_path = lock_path or (
             self.input_dir.parent / "tmp/ocr_pdf_rebuilder/task.lock"
         )
@@ -69,6 +75,8 @@ class PdfBatchRunner:
             "processed_files": len(results),
             "counts": counts,
             "results": results,
+            "external_run_id": self.external_run_id,
+            "input_files": [str(p) for p in pdfs],
         }
         summary_path = self.log_dir / "batch_summary.json"
         self.write_checkpoint(summary_path, payload)
@@ -90,7 +98,7 @@ class PdfBatchRunner:
             raise SystemExit(2) from None
 
     def _run_locked(self) -> None:
-        pdfs = sorted(self.input_dir.glob("*.pdf"))
+        pdfs = list(self.input_files) if self.input_files is not None else sorted(self.input_dir.glob("*.pdf"))
         if not pdfs:
             self.logger(f"No PDF files found in: {self.input_dir}")
             return

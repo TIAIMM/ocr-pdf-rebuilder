@@ -61,6 +61,10 @@ batch_summary.json
 !.env.example
 config/local.toml
 config/production.toml
+/.claude/
+
+# Local validation reports and rendered inspection output
+/outputs/
 
 # Python
 __pycache__/

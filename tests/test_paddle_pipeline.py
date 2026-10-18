@@ -610,7 +610,7 @@ class PaddlePipelineTests(unittest.TestCase):
             result = {
                 "cells": [
                     {
-                        "bbox": [40, 35, 260, 70],
+                        "bbox": [40, 75, 260, 100],
                         "category": "Text",
                         "text": "Preserved OCR heading",
                         "__bbox_units": "pdf",
@@ -789,7 +789,7 @@ class PaddlePipelineTests(unittest.TestCase):
             root = Path(temporary)
             source = root / "source.pdf"
             with fitz.open() as document:
-                document.new_page(width=300, height=400)
+                document.new_page(width=300, height=400).insert_text((40, 60), "Original caption", render_mode=3)
                 document.save(source)
             result = {
                 "cells": [
@@ -823,6 +823,15 @@ class PaddlePipelineTests(unittest.TestCase):
             self.assertEqual(fallback_pages, [0])
             self.assertTrue(result["image_fallback_page"])
             self.assertTrue(result["layout_fit_failures"])
+            self.assertTrue(result["ocr_text_suppressed"])
+            self.assertEqual(result["suppressed_ocr_cell_count"], 1)
+            self.assertEqual(result["cells"], [])
+            self.assertEqual(result["md_nohf_text"], "")
+            self.assertNotIn("This long OCR paragraph", output_md.read_text(encoding="utf-8"))
+            self.assertIn("PDF 第 1 页", output_md.read_text(encoding="utf-8"))
+            with fitz.open(root / "output_searchable.pdf") as searchable:
+                self.assertNotIn("This long OCR paragraph", searchable[0].get_text())
+                self.assertIn("Original caption", searchable[0].get_text())
             with fitz.open(output_pdf) as output:
                 self.assertEqual(output.page_count, 1)
                 self.assertEqual(output[0].get_text().strip(), "")

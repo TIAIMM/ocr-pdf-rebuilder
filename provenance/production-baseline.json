@@ -1,13 +1,13 @@
 {
   "schema": 2,
-  "captured_at": "2026-09-23T09:18:02.278195+00:00",
+  "captured_at": "2026-10-18T06:20:38.221850+00:00",
   "repository_path": "src/ocr_pdf_rebuilder",
   "package_identity": {
     "schema": 1,
     "algorithm": "sha256-canonical-file-manifest-v1",
     "package": "ocr_pdf_rebuilder",
-    "file_count": 32,
-    "files_sha256": "81d5c4450630846f50aa870fa2bcef39bfe4d6da25f8f519db428ada7611356d",
+    "file_count": 39,
+    "files_sha256": "bd1d603dfb2d322f03e5b417a5a831d35898b339acaf6fc542ed0345b1ba858a",
     "files": [
       {
         "path": "__init__.py",
@@ -16,8 +16,8 @@
       },
       {
         "path": "batch_runner.py",
-        "size": 7139,
-        "sha256": "382c7fc90ab5fb47f135d573e3044935cc02c85191219c32e884977f9070bbe9"
+        "size": 7694,
+        "sha256": "bddcbc07a08836cd181e5c2b7b94c2c602b3b180828384b7d90457154680b65d"
       },
       {
         "path": "cli.py",
@@ -35,19 +35,39 @@
         "sha256": "de00b83efefacf0268bfd365acccbc13903df09d0ff6140c1d8527d6d9050a3c"
       },
       {
+        "path": "document_ir.py",
+        "size": 28174,
+        "sha256": "2df331f826ddc5c80afe43dca9cc4e53ffb89c2db91d790c3762e632a4f2328e"
+      },
+      {
         "path": "forward_page_leak.py",
         "size": 12492,
         "sha256": "10ea54c2a330659bfb3177eb1e7c112bf001b54135b79ac23d515d5039878d00"
       },
       {
         "path": "gui.py",
-        "size": 46162,
-        "sha256": "491ccaf50e8f66fdc587b83ebc0c473f986d1ee14173ef8af28c8216823d9dbd"
+        "size": 62032,
+        "sha256": "0b8f60cd279c775f6edb3c2ad485e695f236379510688257dcad36b6631927ee"
+      },
+      {
+        "path": "gui_static.py",
+        "size": 22142,
+        "sha256": "6791fb79901913c5dfd056a36e1caa7f06f3b098408f20df902f31dcf359b207"
       },
       {
         "path": "layout_engine.py",
-        "size": 88050,
-        "sha256": "f9238e57b5593f4da21e1a10cf3e1be43d8a5829846005ddec339195f75921c4"
+        "size": 91005,
+        "sha256": "1a9033e75c047df8be60486463572a49287da13c141de8d63f7aeef324a40894"
+      },
+      {
+        "path": "layout_policy.py",
+        "size": 5692,
+        "sha256": "7ee9ffc669e9866d744105d1c6b009854b6f76f39f7c773f273f897ad03a2a20"
+      },
+      {
+        "path": "manual_corrections.py",
+        "size": 2699,
+        "sha256": "27c08467edaf291ce20d2d5cbe880ea26b57b83db7e0dec84bcf3f4ef1100453"
       },
       {
         "path": "mineru_api_session.py",
@@ -66,13 +86,18 @@
       },
       {
         "path": "mineru_runner.py",
-        "size": 21203,
-        "sha256": "d42b66f6d58bdd8785b6ac936105a43e8624de31be4ade2ecff92469e3b8eaba"
+        "size": 21243,
+        "sha256": "9870c697e47d618aa0aab477042cc6a2ffba84d057b227bd00e3af799f10ec01"
+      },
+      {
+        "path": "output_publication.py",
+        "size": 2995,
+        "sha256": "534acd10d2e72eaa58e5577e9c5a8d30a2e7fabccd850f7a8a8411900de0199f"
       },
       {
         "path": "paddle_pipeline.py",
-        "size": 58230,
-        "sha256": "163410811b779b748be7b86cf40ef21f7641a725ef097c1249aa3b5e8c7ed5db"
+        "size": 60243,
+        "sha256": "74c345c3d78b583ef0f15f9539e4c971c2bcfb02aa1af7e13941f5feebe3e252"
       },
       {
         "path": "paddle_textonly_pdf.py",
@@ -86,8 +111,8 @@
       },
       {
         "path": "page_recovery.py",
-        "size": 46951,
-        "sha256": "44a47b4592d3a1bd80304436560812354e78349e672476d98c5935f615d420f0"
+        "size": 51394,
+        "sha256": "f0b2b553245e0a81a6bc52667b1670a6d9566c22101be92f93352d86e50504cf"
       },
       {
         "path": "pdf_validation.py",
@@ -96,13 +121,13 @@
       },
       {
         "path": "pipeline_config.py",
-        "size": 9009,
-        "sha256": "0e2d560d7e306dd201e4f0ec8a12c817beaa5dffe32a94ff86e8ecb39d6b0682"
+        "size": 9139,
+        "sha256": "03c9aaf60d7e80983e6c02b92e401378616007db7364666cc3500780a53cc187"
       },
       {
         "path": "pipeline_orchestrator.py",
-        "size": 16966,
-        "sha256": "b85a41a4e7de9d1d5cb32415ae4ac78f846fa264e40ddca11a015a1d13f30460"
+        "size": 19876,
+        "sha256": "2e9b19a0d3a62679a429d485b72f4a047a970145596037d693772cbf9f1c5a58"
       },
       {
         "path": "pipeline_runtime.py",
@@ -116,8 +141,8 @@
       },
       {
         "path": "qc_reporting.py",
-        "size": 15959,
-        "sha256": "939d47e3232ac4b9026da13cd5de1785b348edf3311fd3e1f25149c3f89dc16d"
+        "size": 16228,
+        "sha256": "2703448d261bca0c7e5d0ef994c4c14be88659ec38a7f8cb31e5a1fc788196ca"
       },
       {
         "path": "raster_geometry.py",
@@ -131,23 +156,33 @@
       },
       {
         "path": "reportlab_renderer.py",
-        "size": 64886,
-        "sha256": "583b49837213b73d7b5dc3f0e4b1bad4e20a05d73a440bf0157aca9b0940ec50"
+        "size": 70299,
+        "sha256": "6f178752de5c258b04e62d66ac786d8a6c86890695e6f2578bbf2bd2aa8d54e4"
       },
       {
         "path": "runtime_state.py",
-        "size": 19124,
-        "sha256": "1c6af0ed263aafa41a9b1a67f37f7b15b50b4a87f9d8c4b52c0fe373e69ad2bb"
+        "size": 19745,
+        "sha256": "032c11dd2451e70c1d7ea9daa74930f0ae288280feb54450759eeaf24db3d878"
       },
       {
         "path": "searchable_backfill.py",
-        "size": 3503,
-        "sha256": "2bb1657a8d6d1fbcac6843bff7972a81b1e2c5b0477e9c8315133e620b090553"
+        "size": 3995,
+        "sha256": "6c7d8ca23c3fbab00bd1e2df1063014f460899b4f465cc17d5dd286f992a7f4d"
       },
       {
         "path": "searchable_pdf.py",
-        "size": 14849,
-        "sha256": "70d6d385cabc25ff4501e34b694e9967c86e1a6ea6e899a8904131cca6a8ad18"
+        "size": 19210,
+        "sha256": "4499e142e9960f55add6cac0eb10d6063819f2912b1bbfc9365ac977419d4de5"
+      },
+      {
+        "path": "selected_run.py",
+        "size": 3818,
+        "sha256": "77d58099ac9036d056d1b79c1433dd1ff1425e8660488cd325b3afdbdc95f9cd"
+      },
+      {
+        "path": "semantic_render.py",
+        "size": 6296,
+        "sha256": "2697b82cc77ebcb32f7f6fe46f3fb9aabd3e84b6bdebcafa863f39f4e8abbf73"
       },
       {
         "path": "signal_cleanup.py",
@@ -161,8 +196,8 @@
       },
       {
         "path": "text_processing.py",
-        "size": 70108,
-        "sha256": "9414529df85fbdf93c498acf8a748ddea81266961c358c966cee2af90c45d3ab"
+        "size": 73295,
+        "sha256": "0b3b1dad722658e7678079ee71babbdfd4c8b0aea86604101a64509a9e2fc66c"
       },
       {
         "path": "windows_process.py",

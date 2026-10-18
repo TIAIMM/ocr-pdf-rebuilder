@@ -21,6 +21,8 @@ import fitz
 from .batch_runner import PdfBatchRunner
 from . import pipeline_runtime as shared
 from .raster_geometry import DEFAULT_MAX_RASTER_PIXELS
+from .selected_run import run_paths
+from .output_publication import publish_document
 
 
 RUNTIME_ROOT = shared.RUNTIME_ROOT
@@ -30,6 +32,7 @@ PADDLE_OUTPUT_DIR = RUNTIME_ROOT / "paddle_output"
 TMP_DIR = RUNTIME_ROOT / "tmp/paddle_textonly_pdf"
 LOG_DIR = RUNTIME_ROOT / "logs_paddle"
 QC_DIR = RUNTIME_ROOT / "qc_paddle"
+OUTPUT_DIR, PADDLE_OUTPUT_DIR, TMP_DIR, LOG_DIR, QC_DIR = run_paths(RUNTIME_ROOT, "paddle")
 
 WINDOWS_NATIVE = os.name == "nt"
 PADDLE_PYTHON = Path(os.environ.get("PADDLEOCR_PYTHON", (
@@ -84,7 +87,7 @@ if PADDLE_MAX_RASTER_PIXELS <= 0:
 PADDLE_PROCESS_TIMEOUT_SECONDS = 24 * 60 * 60
 PADDLE_PROCESS_IDLE_TIMEOUT_SECONDS = 30 * 60
 PADDLE_PROCESS_TERMINATE_GRACE_SECONDS = 20
-OUTPUT_VERSION = "paddleocr-vl-1.6-reportlab-searchable-v14-safe-visual-fallback-text"
+OUTPUT_VERSION = "paddleocr-vl-1.6-reportlab-searchable-v21-escaped-scripts"
 CHECKPOINT_SCHEMA = 1
 SKIP_EXISTING = True
 
@@ -310,6 +313,8 @@ def completion_matches(
         "implementation_identity_hash": shared.current_package_source_identity_hash(),
         "runtime_identity_hash": paddle_runtime_identity_hash(),
     }
+    from .manual_corrections import correction_path, manifest_revision
+    expected['manual_correction_revision'] = manifest_revision(correction_path(PADDLE_OUTPUT_DIR / source_pdf.stem))
     if any(state.get(key) != value for key, value in expected.items()):
         return False
     paths = {
@@ -398,6 +403,8 @@ def write_completion_state(
         "image_variant_pages": [page_index + 1 for page_index in image_variant_pages],
         "completed_at": time.time(),
     }
+    from .manual_corrections import correction_path, manifest_revision
+    payload['manual_correction_revision'] = manifest_revision(correction_path(PADDLE_OUTPUT_DIR / source_pdf.stem))
     shared.write_checkpoint(state_path, payload)
 
 
@@ -411,9 +418,15 @@ def prepare_workspace(pdf_path: Path, work_dir: Path, raw_dir: Path) -> bool:
         "runtime_identity_hash": paddle_runtime_identity_hash(),
     }
     state = shared.read_checkpoint(state_path)
+    old_runtime = dict((state or {}).get("runtime_identity") or {})
+    current_runtime = dict(paddle_runtime_identity())
+    for runtime in (old_runtime, current_runtime):
+        runtime["config"] = {k: v for k, v in (runtime.get("config") or {}).items() if k != "output_version"}
     resumable = bool(
         state
-        and all(state.get(key) == value for key, value in expected.items())
+        and state.get("source") == expected["source"]
+        and state.get("schema") == CHECKPOINT_SCHEMA
+        and old_runtime == current_runtime
         and work_dir.exists()
         and raw_dir.exists()
     )
@@ -796,12 +809,20 @@ def write_paddle_qc_report(
         "output_page_count": validation_scan.get("page_count"),
         "image_fallback_pages": [page + 1 for page in image_fallback_pages],
         "image_variant_pages": [page + 1 for page in image_variant_pages],
-        "suspect_pages": suspects,
+        "suspect_pages": {str(page): reasons for page, reasons in suspects.items()},
         "page_results": {
             str(page + 1): {
                 "json_path": result.get("json_path"),
                 "retry_reason": result.get("retry_reason"),
                 "cell_count": len(result.get("cells") or []),
+                "ocr_text_suppressed": bool(result.get("ocr_text_suppressed")),
+                "manual_correction": result.get("manual_correction"),
+                "ocr_quality_alerts": result.get("ocr_quality_alerts", []),
+                "suppressed_ocr_cell_count": result.get("suppressed_ocr_cell_count", 0),
+                "structural_source_page_preserved": bool(result.get("structural_source_page_preserved")),
+                "layout_exclusions": result.get("layout_exclusions", []),
+                "speaker_column_policy": result.get("speaker_column_policy"),
+                "table_column_counts": result.get("table_column_counts", []),
                 "rasterization": result.get("rasterization"),
                 "invalid_picture_bbox_count": result.get("invalid_picture_bbox_count") or 0,
                 "layout_trace": result.get("layout_trace"),
@@ -879,6 +900,7 @@ def write_paddle_qc_report(
     return report
 
 
+@publish_document
 def build_outputs(
     pdf_path: Path,
     page_results: dict[int, dict[str, object]],
@@ -889,6 +911,10 @@ def build_outputs(
     output_md: Path,
     output_searchable_pdf: Path | None = None,
 ) -> list[int]:
+    from .document_ir import attach_page, write_document
+    shared.protect_structural_table_pages(pdf_path, page_results, work_dir)
+    from .manual_corrections import correction_path, apply_manual_corrections
+    apply_manual_corrections(pdf_path, page_results, correction_path(raw_dir))
     with fitz.open(pdf_path) as source:
         page_count = source.page_count
         log(f"    [3/5] Building layout pages: 0/{page_count}")
@@ -996,56 +1022,10 @@ def build_outputs(
                         f"        Page {page_index + 1}: removed {fuzzy_removed_count} "
                         "fuzzy duplicate OCR edge line(s)"
                     )
-                blocks = shared.repair_stretched_margin_numeric_ocr_blocks(
-                    blocks, page_width, page_height, source_page=page
-                )
-                stretched_repair_count = sum(
-                    bool(block.get("stretched_margin_numeric_block_repaired"))
-                    for block in blocks
-                )
-                if stretched_repair_count:
-                    result["stretched_margin_numeric_blocks_repaired"] = (
-                        stretched_repair_count
-                    )
-                    log(
-                        f"        Page {page_index + 1}: restored "
-                        f"{stretched_repair_count} line number(s) from a stretched OCR block"
-                    )
-                blocks = shared.repair_margin_number_sequence_values(
-                    blocks,
-                    page_width,
-                    page_height,
-                    source_page=page,
-                    source_rotation_degrees=source_rotation,
-                )
-                sequence_value_repair_count = sum(
-                    bool(block.get("margin_number_sequence_value_repaired"))
-                    for block in blocks
-                )
-                if sequence_value_repair_count:
-                    result["margin_number_sequence_values_repaired"] = (
-                        sequence_value_repair_count
-                    )
-                    log(
-                        f"        Page {page_index + 1}: corrected "
-                        f"{sequence_value_repair_count} margin line-number value(s) "
-                        "from the five-line sequence"
-                    )
-                blocks = shared.repair_overlapping_margin_line_number_blocks(
-                    blocks, page_width, page_height
-                )
-                line_number_repair_count = sum(
-                    bool(block.get("margin_line_number_block_repaired"))
-                    for block in blocks
-                )
-                if line_number_repair_count:
-                    result["margin_line_number_blocks_repaired"] = (
-                        line_number_repair_count
-                    )
-                    log(
-                        f"        Page {page_index + 1}: repaired "
-                        f"{line_number_repair_count} overlapping margin line-number block(s)"
-                    )
+                # Original counters describe source lines, not reflowed lines.
+                # Do not reconstruct them from the source PDF's old text layer.
+                from .layout_policy import apply_layout_policy
+                blocks = apply_layout_policy(blocks, page_width, page_height, result)
                 blocks = shared.repair_overlapping_margin_reference_blocks(
                     blocks, page_width
                 )
@@ -1187,12 +1167,14 @@ def build_outputs(
             if any(block.get("category") == "ImageFallback" for block in blocks):
                 image_fallback_pages.append(page_index)
             total_blocks += len(blocks)
+            attach_page(result, blocks, page_index, page_width, page_height, shared, "paddle")
             page_specs.append((page_width, page_height, blocks))
             if shared.normalize_markdown_text(result.get("md_nohf_text", "")):
                 md_nohf_pages += 1
             markdown_pages.append(shared.markdown_page_from_result(result, blocks, page_index))
             log(f"        Layout page {page_index + 1}/{page_count}: blocks={len(blocks)}")
 
+    write_document(raw_dir / "document-ir.json", [r["document_page"] for _, r in sorted(page_results.items()) if "document_page" in r], "paddle", pdf_path)
     shared.log_category_audit(category_counts, md_nohf_pages, page_count)
     shared.write_book_markdown(output_md, markdown_pages)
     log("    [4/5] Rendering text-only PDF with ReportLab")
@@ -1233,6 +1215,11 @@ def build_outputs(
         output_pdf, text_preserving_fallback_pages, validation
     )
 
+    output_searchable_pdf = output_searchable_pdf or output_pdf.with_name(
+        f"{output_pdf.stem}_searchable.pdf"
+    )
+    shared.build_validated_searchable_pdf(pdf_path, page_results, output_searchable_pdf)
+
     image_variant_pages = shared.image_variant_page_indexes(page_specs)
     if image_variant_pages:
         log(
@@ -1271,6 +1258,7 @@ def build_outputs(
             ]
             trace["rendered_picture_count"] = len(crops)
             trace["picture_crops"] = crops
+        shared.restore_structural_source_pages(output_searchable_pdf, output_image_pdf, page_results)
         image_validation = shared.scan_pdf_validation(
             output_image_pdf,
             progress_callback=lambda current, total: log(
@@ -1287,10 +1275,6 @@ def build_outputs(
     elif output_image_pdf.exists():
         output_image_pdf.unlink()
 
-    output_searchable_pdf = output_searchable_pdf or output_pdf.with_name(
-        f"{output_pdf.stem}_searchable.pdf"
-    )
-    shared.build_validated_searchable_pdf(pdf_path, page_results, output_searchable_pdf)
     write_paddle_qc_report(
         pdf_path,
         raw_dir,
@@ -1342,24 +1326,30 @@ def process_pdf(pdf_path: Path, index: int, total: int) -> dict[str, object]:
     log(f"[{index}/{total}] Start: {pdf_path.name}")
     log(f"    Input:  {pdf_path}")
     log(f"    Output: {output_pdf}")
-    prepare_workspace(pdf_path, work_dir, raw_dir)
+    resumable = prepare_workspace(pdf_path, work_dir, raw_dir)
     with fitz.open(pdf_path) as source:
         page_count = source.page_count
     if page_count == 0:
         raise RuntimeError(f"Empty PDF: {pdf_path}")
     log(f"    Pages:  {page_count}")
     log("    [1/5] Running PaddleOCR-VL parser")
-    with paddle_inference_session(log_path) as session:
-        run_worker(pdf_path, raw_dir, log_path, **session)
+    page_results = load_page_results(raw_dir, page_count) if resumable else {}
+    if len(page_results) == page_count:
+        log("    Rebuilding outputs from complete recognized pages; model startup skipped")
+        prior_qc = shared.read_checkpoint(LOG_DIR / f"{name}_qc.json") or {}
+        shared.restore_page_output_text_policy(page_results, prior_qc)
+    else:
+        with paddle_inference_session(log_path) as session:
+          run_worker(pdf_path, raw_dir, log_path, **session)
 
-        log("    [2/5] Loading and validating PaddleOCR page results")
-        page_results = load_page_results(raw_dir, page_count)
-        page_results = retry_suspicious_pages(
-            pdf_path, raw_dir, page_results, log_path, session
-        )
-        page_results = repair_forward_leaks(
-            pdf_path, raw_dir, page_results, log_path, session
-        )
+          log("    [2/5] Loading and validating PaddleOCR page results")
+          page_results = load_page_results(raw_dir, page_count)
+          page_results = retry_suspicious_pages(
+              pdf_path, raw_dir, page_results, log_path, session
+          )
+          page_results = repair_forward_leaks(
+              pdf_path, raw_dir, page_results, log_path, session
+          )
     shared.suppress_blank_page_outputs(pdf_path, page_results)
     page_results = shared.degrade_repeated_pseudotext_pages_to_images(
         pdf_path, page_results, work_dir

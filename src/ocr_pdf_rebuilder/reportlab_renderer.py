@@ -12,6 +12,11 @@ from .component_runtime import ComponentRuntime
 from .pipeline_config import *
 from .raster_geometry import DEFAULT_MAX_RASTER_PIXELS, bounded_render_dpi
 
+@lru_cache(maxsize=8)
+def _load_semantic_font_set(paths):
+    from reportlab.pdfbase.ttfonts import TTFont
+    return tuple(TTFont(name, path) for name, path in paths)
+
 def reportlab_register_fonts():
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
@@ -31,19 +36,11 @@ def reportlab_register_fonts():
     require_file(GREEK_ITALIC_FONT, "Greek italic font not found")
     require_file(MONO_FONT, "Mono font not found")
 
-    pdfmetrics.registerFont(TTFont("SourceHanSerifCN-Regular", str(CJK_REGULAR_FONT)))
-    pdfmetrics.registerFont(TTFont("SourceHanSerifCN-Medium", str(CJK_MEDIUM_FONT)))
-    pdfmetrics.registerFont(TTFont("SourceHanSerifCN-Bold", str(CJK_BOLD_FONT)))
-
-    pdfmetrics.registerFont(TTFont("Latin-Regular", str(LATIN_REGULAR_FONT)))
-    pdfmetrics.registerFont(TTFont("Latin-Bold", str(LATIN_BOLD_FONT)))
-    pdfmetrics.registerFont(TTFont("Latin-Italic", str(LATIN_ITALIC_FONT)))
-
-    pdfmetrics.registerFont(TTFont("Greek-Regular", str(GREEK_REGULAR_FONT)))
-    pdfmetrics.registerFont(TTFont("Greek-Bold", str(GREEK_BOLD_FONT)))
-    pdfmetrics.registerFont(TTFont("Greek-Italic", str(GREEK_ITALIC_FONT)))
-
-    pdfmetrics.registerFont(TTFont("Mono", str(MONO_FONT)))
+    paths=tuple(zip(REPORTLAB_REGISTERED_FONT_NAMES, map(str, (
+        CJK_REGULAR_FONT,CJK_MEDIUM_FONT,CJK_BOLD_FONT,LATIN_REGULAR_FONT,
+        LATIN_BOLD_FONT,LATIN_ITALIC_FONT,GREEK_REGULAR_FONT,GREEK_BOLD_FONT,
+        GREEK_ITALIC_FONT,MONO_FONT))))
+    for font in _load_semantic_font_set(paths): pdfmetrics.registerFont(font)
 
     latin_chars = set(pdfmetrics.getFont("Latin-Regular").face.charToGlyph.keys())
     greek_chars = set(pdfmetrics.getFont("Greek-Regular").face.charToGlyph.keys())
@@ -216,7 +213,7 @@ def split_reportlab_font_runs(segments):
         # from the source spelling (for example F^-1 -> F⁻¹). Normalize before
         # assigning font runs so every final glyph is checked against the font
         # that will actually draw it.
-        text = normalize_draw_segment_text(
+        text = seg.get("text", "") if seg.get("semantic_literal") else normalize_draw_segment_text(
             text=seg.get("text", ""),
             strip_markdown=style != "code",
         )
@@ -299,6 +296,9 @@ def reportlab_font_for_segment(seg, line_style):
         return fontname, False
 
     italic = style in {"math", "italic", "strongitalic"} or line_is_italic(line_style)
+    if style == "strongitalic" and script in {"latin", "greek", "serif-fallback"}:
+        fontname = "Latin-Italic" if script == "latin" else "Greek-Italic"
+        return fontname, True
     bold = style in {"strong", "strongitalic"} or line_is_bold(line_style)
     candidates = (
         "Greek-Italic" if italic else "Greek-Bold" if bold else "Greek-Regular",
@@ -457,41 +457,58 @@ def table_column_count(rows):
 def reportlab_plain_table_layout(rect, rows, fontsize, line_height):
     if not rows:
         return []
-
-    col_count = table_column_count(rows)
-    col_gap = fontsize * 0.8
-    usable_width = rect.width - col_gap * max(0, col_count - 1)
-    if usable_width <= fontsize * col_count:
-        return None
-
-    col_width = usable_width / col_count
+    weights = table_column_weights(rows)
+    widths = [rect.width * w / sum(weights) for w in weights]
+    lefts = [rect.x0]
+    for width in widths:
+        lefts.append(lefts[-1] + width)
+    padding = fontsize * 0.25
     line_gap = fontsize * line_height
-    y_top = rect.y0
-    layout = []
-    for row in rows:
-        cells = row.get("cells") or row.get("nonempty_cells") or []
-        cell_lines = []
-        max_lines = 1
-        for col_index in range(col_count):
-            cell = cells[col_index] if col_index < len(cells) else ""
-            lines = reportlab_split_plain_lines(cell, None, fontsize, col_width) or [""]
-            cell_lines.append(lines)
-            max_lines = max(max_lines, len(lines))
-        row_height = max_lines * line_gap
-        if y_top + row_height > rect.y1 + 0.01:
-            return None
-        layout.append(
-            {
-                "y_top": y_top,
-                "cell_lines": cell_lines,
-                "col_width": col_width,
-                "col_gap": col_gap,
-                "line_gap": line_gap,
-                "fontsize": fontsize,
-            }
-        )
-        y_top += row_height
-    return {"mode": "plain", "rows": layout}
+    heights = [line_gap + padding * 2] * len(rows)
+    anchors = []
+    for row_index, row in enumerate(rows):
+        specs = row.get("cell_specs") or [
+            {"col": i, "colspan": 1, "rowspan": 1, "text": text}
+            for i, text in enumerate(row.get("cells", []))]
+        for spec in specs:
+            col, span = spec["col"], spec.get("colspan", 1)
+            width = sum(widths[col:col + span])
+            if width <= padding * 2:
+                return None
+            lines = [line for paragraph in spec["text"].split("\n")
+                     for line in (reportlab_split_plain_lines(paragraph, None, fontsize, width - padding * 2) or [""])]
+            row_span = spec.get("rowspan", 1)
+            needed = len(lines) * line_gap + padding * 2
+            semantic_cell=None
+            if spec.get("semantic_lines") is not None:
+                import sys,copy
+                from .semantic_render import semantic_layout
+                semantic_lines=copy.deepcopy(spec["semantic_lines"])
+                if spec.get("header"):
+                    for line in semantic_lines:
+                        for run in line["inlines"]:
+                            if "strong" not in run["styles"]: run["styles"].append("strong")
+                semantic_cell={"category":"Table-cell","semantic":{"lines":semantic_lines}}
+                cell_rect=fitz.Rect(lefts[col]+padding,0,lefts[col]+width-padding,100000)
+                semantic_rows=semantic_layout(semantic_cell,cell_rect,fontsize,line_height,sys.modules[__name__])
+                if semantic_rows is None: return None
+                needed=max(line_gap,max((r[1]+line_gap for r in semantic_rows),default=0))+padding*2
+            if row_span == 1:
+                heights[row_index] = max(heights[row_index], needed)
+            anchors.append({"row": row_index, "rowspan": row_span, "colspan": span,
+                            "x": lefts[col], "width": width, "lines": lines, "needed": needed,"semantic_cell":semantic_cell})
+    for cell in anchors:
+        start, end = cell["row"], cell["row"] + cell["rowspan"]
+        extra = max(0, cell["needed"] - sum(heights[start:end])) / cell["rowspan"]
+        for row_index in range(start, end):
+            heights[row_index] += extra
+    if sum(heights) > rect.height + 0.01:
+        return None
+    for cell in anchors:
+        cell.update(y_top=rect.y0 + sum(heights[:cell["row"]]),
+                    height=sum(heights[cell["row"]:cell["row"] + cell["rowspan"]]),
+                    fontsize=fontsize, line_gap=line_gap, padding=padding)
+    return {"mode": "cells", "cells": anchors}
 
 
 def reportlab_grid_table_layout(rect, rows, fontsize, line_height):
@@ -529,14 +546,14 @@ def reportlab_table_layout(rect, block_or_text, fontsize, line_height):
     rows = table_rows_for_block(block_or_text)
     if not rows:
         return []
-    if is_toc_table(rows):
+    if is_toc_table(rows) and not (isinstance(block_or_text,dict) and block_or_text.get("semantic")):
         layout = reportlab_toc_table_layout(rect, rows, fontsize, line_height)
         if layout is not None:
             return layout
     layout = reportlab_plain_table_layout(rect, rows, fontsize, line_height)
     if layout is not None:
         return layout
-    return reportlab_grid_table_layout(rect, rows, fontsize, line_height)
+    return None
 
 
 def reportlab_draw_table_block(c, page_height, rect, block_or_text, fontsize, line_height, dry_run=False):
@@ -550,6 +567,21 @@ def reportlab_draw_table_block(c, page_height, rect, block_or_text, fontsize, li
         return True
 
     if layout == []:
+        return True
+
+    if layout["mode"] == "cells":
+        for cell in layout["cells"]:
+            if cell.get("semantic_cell"):
+                import sys
+                from .semantic_render import draw_semantic
+                cell_rect=fitz.Rect(cell["x"]+cell["padding"],cell["y_top"]+cell["padding"],
+                                    cell["x"]+cell["width"]-cell["padding"],cell["y_top"]+cell["height"]-cell["padding"])
+                if not draw_semantic(c,page_height,cell_rect,cell["semantic_cell"],cell["fontsize"],line_height,sys.modules[__name__]):
+                    return False
+                continue
+            for line_index, line in enumerate(cell["lines"]):
+                baseline = page_height - cell["y_top"] - cell["padding"] - line_index * cell["line_gap"] - cell["fontsize"]
+                reportlab_draw_plain_text(c, cell["x"] + cell["padding"], baseline, line, cell["fontsize"])
         return True
 
     if layout["mode"] == "plain":
@@ -1108,6 +1140,12 @@ def reportlab_fit_fontsize(page_height, rect, text, fontsize, min_size, line_hei
 
 
 def reportlab_box_fits(page_height, rect, block_or_text, fontsize, line_height, align):
+    if isinstance(block_or_text, dict) and block_or_text.get("semantic") and block_or_text.get("category") not in {"Table", "Formula", "Picture", "ImageFallback"}:
+        import sys
+        from .document_ir import ensure_structure
+        from .semantic_render import draw_semantic
+        ensure_structure(block_or_text, sys.modules[__name__])
+        return draw_semantic(None, page_height, rect, block_or_text, fontsize, line_height, sys.modules[__name__], dry_run=True)
     if isinstance(block_or_text, dict) and block_or_text.get("category") == "Table":
         return reportlab_table_fits(page_height, rect, block_or_text, fontsize, line_height)
     text = block_or_text.get("text", "") if isinstance(block_or_text, dict) else str(block_or_text or "")
@@ -1209,6 +1247,10 @@ def reportlab_fit_box_params(page_height, rect, block_or_text, fontsize, min_siz
         preferred_line_height = preferred_line_height_for_block(block_or_text)
         enforce_body_font_floor = bool(block_or_text.get("enforce_body_font_floor"))
         preserve_source_line_spacing = bool(block_or_text.get("preserve_source_line_spacing"))
+        if block_or_text.get('manual_reference_layout'):
+            min_line_height = 1.2
+            preferred_line_height = 1.25
+            preserve_source_line_spacing = True
     else:
         min_line_height = 0.82
         preferred_line_height = 1.16
@@ -1653,7 +1695,11 @@ def render_blocks_to_pdf_reportlab(
                     f"text={snippet!r}"
                 )
 
-            if reportlab_draw_rotated_narrow_textbox(
+            if block.get("semantic") and block["category"] not in {"Table", "Formula", "Picture", "ImageFallback"}:
+                import sys
+                from .semantic_render import draw_semantic
+                drawn = draw_semantic(c, page_height, rect, block, fontsize, line_height, sys.modules[__name__])
+            elif reportlab_draw_rotated_narrow_textbox(
                 c,
                 page_height,
                 rect,
